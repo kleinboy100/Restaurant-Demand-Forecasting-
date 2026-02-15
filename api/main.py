@@ -1,4 +1,4 @@
-# main.py - Copy this exact code
+# api/main.py
 from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import List
@@ -152,115 +152,7 @@ def get_dashboard(request: DashboardRequest):
 # ============ RUN ============
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))            "Bread": 1,
-            "Chicken": 200,  # grams
-            "Polony": 2,
-            "Atchar": 1,
-            "Onions": 0.5,
-            "Tomatoes": 1,
-            "Chips": 150
-        }
-    },
-    "Beef Kota": {
-        "ingredients": {
-            "Bread": 1,
-            "Beef": 200,  # grams
-            "Polony": 2,
-            "Atchar": 1,
-            "Onions": 0.5,
-            "Tomatoes": 1,
-            "Chips": 150
-        }
-    },
-    "Vegetable Kota": {
-        "ingredients": {
-            "Bread": 1,
-            "Potatoes": 100,
-            "Carrots": 50,
-            "Onions": 1,
-            "Tomatoes": 1,
-            "Chips": 100
-        }
-    }
-}
-
-# ============ LOAD TRAINED MODELS ============
-MODELS = {}
-MANIFEST = None
-
-try:
-    # Load manifest first to know which models to load
-    with open('models/manifest.pkl', 'rb') as f:
-        MANIFEST = pickle.load(f)
-    
-    # Load each ingredient model
-    for ingredient in MANIFEST['ingredients']:
-        model_path = f'models/{ingredient}_model.pkl'
-        if os.path.exists(model_path):
-            with open(model_path, 'rb') as f:
-                MODELS[ingredient] = pickle.load(f)
-        else:
-            print(f"⚠️ Model not found: {model_path}")
-except Exception as e:
-    print(f"Warning: Could not load models - {e}")
-
-# ============ DATA MODELS ============
-class ForecastRequest(BaseModel):
-    ingredient: str
-    days_ahead: int = 7
-    weather_forecast: List[float] = None  # [weather_score for each day]
-
-class InventoryRequest(BaseModel):
-    ingredient: str
-    current_stock: float
-
-class DashboardRequest(BaseModel):
-    ingredients: List[str]
-    current_stocks: List[float]
-
-# ============ API ENDPOINTS ============
-@app.get("/")
-def root():
-    return {"message": "Kota Restaurant Forecasting API", "status": "running"}
-
-@app.get("/health")
-def health():
-    return {"status": "healthy"}
-
-@app.post("/api/forecast/")
-def get_forecast(request: ForecastRequest):
-    """Get demand forecast for a specific ingredient"""
-    if request.ingredient not in MODELS:
-        raise HTTPException(status_code=404, detail="Ingredient not found")
-    
-    model = MODELS[request.ingredient]
-    
-    # Create future dataframe
-    future = model.make_future_dataframe(periods=request.days_ahead)
-    
-    # Add regressors for future days
-    future['day_of_week'] = future['ds'].dt.dayofweek
-    future['is_weekend'] = (future['day_of_week'] >= 5).astype(int)
-    
-    # Weather forecast (default sunny)
-    weather_forecast = request.weather_forecast or [1.0] * request.days_ahead
-    weather_extended = [0.5] * (len(future) - request.days_ahead) + weather_forecast
-    future['weather_score'] = weather_extended
-    
-    # Make predictions
-    forecast = model.predict(future)
-    
-    # Prepare response
-    predictions = forecast.tail(request.days_ahead)
-    
-    return {
-        "status": "success",
-        "ingredient": request.ingredient,
-        "predictions": [
-            {
-                "date": row['ds'].strftime('%Y-%m-%d'),
-                "predicted": round(row['yhat'], 1),
-                "min": round(row['yhat_lower'], 1),
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))ound(row['yhat_lower'], 1),
                 "max": round(row['yhat_upper'], 1)
             }
             for _, row in predictions.iterrows()
