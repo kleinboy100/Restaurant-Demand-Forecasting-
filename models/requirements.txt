@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+pandas
+prophet
+pydantic
+numpy
+requests
+scikit-learn
