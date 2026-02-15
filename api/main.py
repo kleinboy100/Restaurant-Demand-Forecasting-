@@ -10,6 +10,9 @@ import numpy as np
 
 app = FastAPI(title="Kota Restaurant AI Forecasting API")
 
+# Debugging output
+print(f"Starting server on port: {os.environ.get('PORT', '8000')}")
+
 # ============ DATA MODELS ============
 class ForecastRequest(BaseModel):
     restaurant_id: int
@@ -152,86 +155,5 @@ def get_dashboard(request: DashboardRequest):
 # ============ RUN ============
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))ound(row['yhat_lower'], 1),
-                "max": round(row['yhat_upper'], 1)
-            }
-            for _, row in predictions.iterrows()
-        ],
-        "weekly_total": round(predictions['yhat'].sum(), 1)
-    }
-
-@app.post("/api/recommend/")
-def get_recommendation(request: InventoryRequest):
-    """Get reorder recommendation for an ingredient"""
-    forecast_req = ForecastRequest(
-        ingredient=request.ingredient,
-        days_ahead=7,
-        weather_forecast=[1.0] * 7  # Default sunny
-    )
-    forecast = get_forecast(forecast_req)
-    
-    if forecast.get("status") != "success":
-        return forecast
-    
-    weekly_demand = forecast["weekly_total"]
-    current = request.current_stock
-    
-    # Calculate days of stock left
-    days_left = (current / (weekly_demand / 7)) if weekly_demand > 0 else 999
-    
-    # Recommended order (weekly demand + 20% buffer - current stock)
-    recommended = max(0, weekly_demand * 1.2 - current)
-    
-    # Urgency
-    if days_left < 3:
-        urgency = "HIGH"
-        action = "Order immediately"
-    elif days_left < 7:
-        urgency = "MEDIUM" 
-        action = "Order within 2 days"
-    else:
-        urgency = "LOW"
-        action = "Stock OK"
-    
-    return {
-        "status": "success",
-        "ingredient": request.ingredient,
-        "current_stock": current,
-        "predicted_weekly": weekly_demand,
-        "days_left": round(days_left, 1),
-        "recommendation": round(recommended, 1),
-        "urgency": urgency,
-        "action": action
-    }
-
-@app.post("/api/dashboard/")
-def get_dashboard(request: DashboardRequest):
-    """Get all recommendations for dashboard"""
-    results = []
-    
-    for ingredient, stock in zip(request.ingredients, request.current_stocks):
-        req = InventoryRequest(
-            ingredient=ingredient,
-            current_stock=stock
-        )
-        result = get_recommendation(req)
-        if result.get("status") == "success":
-            results.append(result)
-    
-    # Sort by urgency
-    urgency_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
-    results.sort(key=lambda x: urgency_order.get(x.get("urgency", "LOW"), 3))
-    
-    return {
-        "status": "success",
-        "summary": {
-            "total_items": len(results),
-            "high_urgency": sum(1 for r in results if r.get("urgency") == "HIGH"),
-            "medium_urgency": sum(1 for r in results if r.get("urgency") == "MEDIUM"),
-        },
-        "items": results
-    }
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
