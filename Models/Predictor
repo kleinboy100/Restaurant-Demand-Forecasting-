@@ -1,0 +1,397 @@
+# ============================================================
+# KOTA RESTAURANT DEMAND FORECASTING MODEL
+# ============================================================
+
+
+#!pip install pandas numpy scikit-learn prophet xgboost matplotlib plotly requests
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import plotly.express as px
+import requests
+from prophet import Prophet
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+import pickle
+import warnings
+warnings.filterwarnings('ignore')
+
+print("✅ Environment ready!")
+
+# ============================================================
+# STEP 1: DEFINING KOTA MENU INGREDIENTS
+# ============================================================
+
+# Each kota has specific ingredients - this is your menu data
+KOTA_MENU = {
+    "Cheese Kota": {
+        "ingredients": {
+            "Bread": 1,  # 1 loaf
+            "Cheese": 2,  # 2 slices
+            "Polony": 2,
+            "Atchar": 1,
+            "Onions": 0.5,
+            "Tomatoes": 1,
+            "Chips": 150  # grams
+        }
+    },
+    "Sausage Kota": {
+        "ingredients": {
+            "Bread": 1,
+            "Sausage": 2,
+            "Polony": 2,
+            "Atchar": 1,
+            "Onions": 0.5,
+            "Tomatoes": 1,
+            "Chips": 150
+        }
+    },
+    "Chicken Kota": {
+        "ingredients": {
+            "Bread": 1,
+            "Chicken": 200,  # grams
+            "Polony": 2,
+            "Atchar": 1,
+            "Onions": 0.5,
+            "Tomatoes": 1,
+            "Chips": 150
+        }
+    },
+    "Beef Kota": {
+        "ingredients": {
+            "Bread": 1,
+            "Beef": 200,  # grams
+            "Polony": 2,
+            "Atchar": 1,
+            "Onions": 0.5,
+            "Tomatoes": 1,
+            "Chips": 150
+        }
+    },
+    "Vegetable Kota": {
+        "ingredients": {
+            "Bread": 1,
+            "Potatoes": 100,
+            "Carrots": 50,
+            "Onions": 1,
+            "Tomatoes": 1,
+            "Chips": 100
+        }
+    }
+}
+
+print("📋 Kota Menu Loaded:")
+for kota, details in KOTA_MENU.items():
+    print(f"  • {kota}: {details['ingredients']}")
+
+# ============================================================
+# STEP 2: GENERATE SAMPLE ORDER DATA
+# ============================================================
+
+# This simulates 90 days of order history
+np.random.seed(42)
+
+dates = pd.date_range(start='2025-11-01', end='2026-01-30', freq='D')
+orders = []
+
+for date in dates:
+    day_of_week = date.dayofweek
+    is_weekend = day_of_week >= 5
+
+    # Base demand varies by day
+    base_multiplier = 1.5 if is_weekend else 1.0
+    weather_factor = 1.0  # Could integrate weather API here
+
+    for kota_name, menu_data in KOTA_MENU.items():
+        # Random demand with some pattern
+        base_demand = np.random.poisson(8 * base_multiplier)
+        quantity = max(0, base_demand + np.random.randint(-3, 4))
+
+        orders.append({
+            'date': date.strftime('%Y-%m-%d'),
+            'kota': kota_name,
+            'quantity': quantity,
+            'day_of_week': day_of_week,
+            'is_weekend': int(is_weekend),
+            'weather': 'sunny'  # Placeholder
+        })
+
+orders_df = pd.DataFrame(orders)
+print(f"\n📊 Generated {len(orders_df)} order records")
+print(orders_df.head(10))
+
+# ============================================================
+# STEP 3: CONVERTING ORDERS TO INGREDIENT DEMAND
+# ============================================================
+
+def orders_to_ingredients(orders_df, KOTA_MENU):
+    """
+    Convert kota orders to ingredient demand
+    """
+    ingredient_demand = []
+
+    for _, order in orders_df.iterrows():
+        date = order['date']
+        kota = order['kota']
+        qty = order['quantity']
+
+        if kota in KOTA_MENU:
+            for ingredient, amount in KOTA_MENU[kota]['ingredients'].items():
+                ingredient_demand.append({
+                    'date': date,
+                    'ingredient': ingredient,
+                    'quantity_used': amount * qty,
+                    'day_of_week': order['day_of_week'],
+                    'is_weekend': order['is_weekend']
+                })
+
+    return pd.DataFrame(ingredient_demand)
+
+# Aggregate by ingredient and date
+ingredient_df = orders_to_ingredients(orders_df, KOTA_MENU)
+ingredient_daily = ingredient_df.groupby(['date', 'ingredient'])['quantity_used'].sum().reset_index()
+
+print("\n📦 Ingredient Demand (Sample):")
+print(ingredient_daily.head(10))
+
+# ============================================================
+# STEP 4: ADD WEATHER DATA (Using Free API)
+# ============================================================
+
+def get_weather_data(start_date, end_date, city='Johannesburg'):
+    """
+    Fetch weather data from Open-Meteo (free API)
+    """
+    # This is a placeholder - in production, call the API
+    # For now, generate sample weather data
+    dates = pd.date_range(start=start_date, end=end_date)
+    weather_data = []
+
+    for date in dates:
+        # Simulate weather (in production, use real API)
+        temp = np.random.randint(15, 35)
+        condition = np.random.choice(['sunny', 'cloudy', 'rainy'], p=[0.6, 0.3, 0.1])
+        weather_data.append({
+            'date': date.strftime('%Y-%m-%d'),
+            'temperature': temp,
+            'condition': condition
+        })
+
+    return pd.DataFrame(weather_data)
+
+# Get weather for your date range
+weather_df = get_weather_data('2025-11-01', '2026-01-30')
+print("\n🌤️ Weather Data (Sample):")
+print(weather_df.head())
+
+# ============================================================
+# STEP 5: PREPARE TRAINING DATA FOR SPECIFIC INGREDIENT
+# ============================================================
+
+def prepare_ingredient_data(ingredient_name, ingredient_daily, weather_df):
+    """
+    Prepare data for training a model for specific ingredient
+    """
+    # Filter for specific ingredient
+    df = ingredient_daily[ingredient_daily['ingredient'] == ingredient_name].copy()
+
+    if len(df) == 0:
+        return None
+
+    # Merge with weather
+    df['date'] = pd.to_datetime(df['date'])
+    weather_df['date'] = pd.to_datetime(weather_df['date'])
+    df = df.merge(weather_df, on='date', how='left')
+
+    # Create features
+    df['day_of_week'] = df['date'].dt.dayofweek
+    df['month'] = df['date'].dt.month
+    df['is_weekend'] = (df['day_of_week'] >= 5).astype(int)
+
+    # Encode weather
+    weather_map = {'sunny': 1, 'cloudy': 0.5, 'rainy': 0.2}
+    df['weather_score'] = df['condition'].map(weather_map)
+
+    return df
+
+# Example: Prepare data for Tomatoes
+tomatoes_df = prepare_ingredient_data('Tomatoes', ingredient_daily, weather_df)
+print("\n🍅 Tomatoes Training Data:")
+print(tomatoes_df.head())
+
+# ============================================================
+# STEP 6: TRAIN PROPHET MODEL FOR EACH INGREDIENT
+# ============================================================
+
+def train_ingredient_model(ingredient_name, ingredient_daily, weather_df):
+    """
+    Train Prophet model for specific ingredient
+    """
+    df = prepare_ingredient_data(ingredient_name, ingredient_daily, weather_df)
+
+    if df is None or len(df) < 14:
+        print(f"⚠️ Not enough data for {ingredient_name}")
+        return None
+
+    # Prepare data for Prophet
+    prophet_df = df[['date', 'quantity_used']].rename(columns={'date': 'ds', 'quantity_used': 'y'})
+
+    # Add regressors
+    prophet_df['day_of_week'] = df['day_of_week'].values
+    prophet_df['is_weekend'] = df['is_weekend'].values
+    prophet_df['weather_score'] = df['weather_score'].values
+
+    # Train model
+    model = Prophet(
+        yearly_seasonality=False,
+        weekly_seasonality=True,
+        daily_seasonality=False
+    )
+    model.add_regressor('day_of_week')
+    model.add_regressor('is_weekend')
+    model.add_regressor('weather_score')
+
+    model.fit(prophet_df)
+
+    return model
+
+# Train models for all ingredients
+unique_ingredients = ingredient_daily['ingredient'].unique()
+trained_models = {}
+
+print("\n🚀 Training models for all ingredients...")
+for ingredient in unique_ingredients:
+    model = train_ingredient_model(ingredient, ingredient_daily, weather_df)
+    if model:
+        trained_models[ingredient] = model
+        print(f"  ✅ {ingredient} model trained")
+
+print(f"\n📊 Successfully trained {len(trained_models)} models")
+
+# ============================================================
+# STEP 7: MAKE PREDICTIONS
+# ============================================================
+
+def predict_ingredient_demand(ingredient_name, days_ahead=7, weather_forecast=None):
+    """
+    Predict demand for next N days
+    """
+    if ingredient_name not in trained_models:
+        return None
+
+    model = trained_models[ingredient_name]
+
+    # Create future dataframe
+    future = model.make_future_dataframe(periods=days_ahead)
+
+    # Add weather forecast (for prediction days)
+    if weather_forecast is None:
+        # Default weather
+        weather_forecast = [1.0] * days_ahead  # sunny
+
+    # Add regressors for future days
+    future['day_of_week'] = future['ds'].dt.dayofweek
+    future['is_weekend'] = (future['day_of_week'] >= 5).astype(int)
+
+    # Map weather for future
+    weather_extended = [0.5] * (len(future) - days_ahead) + weather_forecast
+    future['weather_score'] = weather_extended
+
+    # Predict
+    forecast = model.predict(future)
+
+    # Return only future predictions
+    predictions = forecast.tail(days_ahead)
+
+    return predictions[['ds', 'yhat', 'yhat_lower', 'yhat_upper']]
+
+# Example: Predict Tomatoes demand for next 7 days
+tomatoes_prediction = predict_ingredient_demand('Tomatoes', days_ahead=7)
+print("\n🔮 Tomatoes Demand Forecast (Next 7 Days):")
+print(tomatoes_prediction)
+
+# ============================================================
+# STEP 8: CALCULATE REORDER RECOMMENDATIONS
+# ============================================================
+
+def get_reorder_recommendation(ingredient_name, current_stock, weather_forecast=None):
+    """
+    Calculate reorder recommendation based on prediction
+    """
+    prediction = predict_ingredient_demand(ingredient_name, days_ahead=7, weather_forecast=weather_forecast)
+
+    if prediction is None:
+        return {"error": "No model available"}
+
+    # Predicted weekly demand
+    weekly_demand = prediction['yhat'].sum()
+
+    # Days of stock left
+    days_left = (current_stock / (weekly_demand / 7)) if weekly_demand > 0 else 999
+
+    # Recommended order (weekly demand + 20% buffer - current stock)
+    recommended_order = max(0, weekly_demand * 1.2 - current_stock)
+
+    # Urgency level
+    if days_left < 3:
+        urgency = "HIGH"
+        action = "Order immediately"
+    elif days_left < 7:
+        urgency = "MEDIUM"
+        action = "Order within 2 days"
+    else:
+        urgency = "LOW"
+        action = "Stock OK"
+
+    return {
+        "ingredient": ingredient_name,
+        "current_stock": current_stock,
+        "predicted_weekly_demand": round(weekly_demand, 2),
+        "days_of_stock_left": round(days_left, 1),
+        "recommended_order": round(recommended_order, 2),
+        "urgency": urgency,
+        "action": action,
+        "daily_predictions": [
+            {
+                "date": row['ds'].strftime('%Y-%m-%d'),
+                "predicted": round(row['yhat'], 1)
+            }
+            for _, row in prediction.iterrows()
+        ]
+    }
+
+# Test recommendation
+test_rec = get_reorder_recommendation('Tomatoes', current_stock=15)
+print("\n🛒 Reorder Recommendation for Tomatoes:")
+print(test_rec)
+
+# ============================================================
+# STEP 9: SAVE MODELS TO DRIVE/GITHUB
+# ============================================================
+
+import os
+from google.colab import files
+
+# Save each model
+os.makedirs('trained_models', exist_ok=True)
+
+for ingredient, model in trained_models.items():
+    filename = f"trained_models/{ingredient}_model.pkl"
+    with open(filename, 'wb') as f:
+        pickle.dump(model, f)
+    print(f"💾 Saved: {filename}")
+
+# Create a manifest file with metadata
+manifest = {
+    "training_date": "2026-02-13",
+    "ingredients": list(trained_models.keys()),
+    "menu": KOTA_MENU,
+    "model_type": "Prophet with weather regressors"
+}
+
+with open('trained_models/manifest.pkl', 'wb') as f:
+    pickle.dump(manifest, f)
+
+print("\n✅ All models saved!")
+print("📁 Download 'trained_models' folder from Files sidebar")
