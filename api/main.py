@@ -12,8 +12,8 @@ from prophet import Prophet
 app = FastAPI(title="Kota AI: Klerksdorp Edition")
 
 # --- SUPABASE CONFIG ---
-SUPABASE_URL = os.getenv("https://aweceghpsgqhilydnoun.supabase.co")
-SUPABASE_KEY = os.getenv("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 # Validate and create Supabase client
 def get_supabase_client():
@@ -275,6 +275,95 @@ async def get_forecast(request: ForecastRequest):
             "predicted": round(max(0, row['final_prediction']), 1),
             "low_estimate": round(max(0, row['yhat_lower']), 1),
             "high_estimate": round(max(0, row['yhat_upper']), 1)
+        } 
+        for _, row in data.iterrows()
+    ]
+    
+    return {
+        "item": request.item_name,
+        "days_ahead": request.days_ahead,
+        "weekly_total": round(data['final_prediction'].sum(), 1),
+        "forecast": formatted_data
+    }
+
+@app.post("/api/recommend")
+async def get_recommendation(request: RecommendationRequest):
+    """Get reorder recommendation based on current stock."""
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    
+    try:
+        # Get forecast for next 7 days
+        forecast_data = generate_world_class_forecast(request.item_name, 7)
+        
+        if forecast_data is None:
+            # Fallback: estimate based on past sales
+            sales_data = get_sales_from_order_items(request.item_name)
+            if sales_data.empty:
+                avg_daily = 10  # Default if no data
+            else:
+                avg_daily = sales_data['y'].mean()
+            
+            weekly_need = avg_daily * 7
+        else:
+            weekly_need = forecast_data['final_prediction'].sum()
+        
+        # Calculate days of stock left
+        if request.current_stock <= 0:
+            days_left = 0
+        else:
+            days_left = request.current_stock / (weekly_need / 7)
+        
+        # Calculate recommendation
+        safety_factor = 1.5  # 50% safety stock
+        recommended_order = max(0, (weekly_need * safety_factor) - request.current_stock)
+        
+        # Determine urgency
+        if days_left < 3:
+            urgency = "HIGH"
+        elif days_left < 7:
+            urgency = "MEDIUM"
+        else:
+            urgency = "LOW"
+        
+        return {
+            "item": request.item_name,
+            "current_stock": request.current_stock,
+            "predicted_weekly_demand": round(weekly_need, 1),
+            "days_of_stock_left": round(days_left, 1),
+            "recommended_order": round(recommended_order, 1),
+            "urgency": urgency,
+            "reorder_threshold": round(weekly_need / 7 * 3, 1)  # 3 days worth
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating recommendation: {str(e)}")
+
+# Startup check
+@app.on_event("startup")
+async def startup_event():
+    print("🚀 Kota AI API Starting...")
+    if supabase:
+        try:
+            # Test connection
+            res = supabase.table("order_items").select("*", count="exact").limit(5).execute()
+            count = len(res.data) if res.data else 0
+            print(f"✅ Supabase connected. Found {count} order items")
+            
+            # List unique items
+            if count > 0:
+                df = pd.DataFrame(res.data)
+                unique_items = df['item_name'].unique()[:5]
+                print(f"📋 Sample items: {', '.join(unique_items)}")
+        except Exception as e:
+            print(f"⚠️ Could not fetch order_items: {str(e)}")
+    else:
+        print("⚠️ Warning: Supabase not configured. Add SUPABASE_URL and SUPABASE_KEY env vars.")
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)         "high_estimate": round(max(0, row['yhat_upper']), 1)
         } 
         for _, row in data.iterrows()
     ]
