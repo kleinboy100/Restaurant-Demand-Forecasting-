@@ -17,7 +17,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
 
 # Validate and create Supabase client
 def get_supabase_client():
-    if not SUPABASE_URL or not SUPABASE_KEY:
+    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
         print("⚠️ Supabase credentials not set!")
         return None
     
