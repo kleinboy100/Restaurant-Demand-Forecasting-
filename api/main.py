@@ -1,11 +1,9 @@
 # main.py
 import os
 import logging
-from pythonjsonlogger import jsonlogger
-from dotenv import load_dotenv
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
-
+import json
 import numpy as np
 import pandas as pd
 import requests
@@ -17,21 +15,29 @@ from prophet import Prophet
 # ---------------------------------------------------------------------------
 # 0. LOAD ENVIRONMENT VARIABLES (FOR LOCAL DEVELOPMENT)
 # ---------------------------------------------------------------------------
-load_dotenv()  # Loads .env for local dev — but backend ignores VITE_
+load_dotenv()  # Loads .env for local dev — backend ignores VITE_ prefixes
 
 # ---------------------------------------------------------------------------
-# 1. SET UP STRUCTURED JSON LOGGING — MUST BE FIRST BEFORE ANY LOGGING CALLS
+# 1. SET UP STRUCTURED JSON LOGGING — NATIVE PYTHON 3.14+ COMPATIBLE
 # ---------------------------------------------------------------------------
+class JsonFormatter(logging.Formatter):
+    def format(self, record):
+        log_entry = {
+            "time": datetime.utcfromtimestamp(record.created).isoformat() + "Z",
+            "level": record.levelname,
+            "message": record.getMessage(),
+            "module": record.module,
+            "lineno": record.lineno
+        }
+        if record.exc_info:
+            log_entry["exception"] = self.formatException(record.exc_info)
+        return json.dumps(log_entry, ensure_ascii=False)
+
 logger = logging.getLogger("kota-ai")
 logger.setLevel(logging.INFO)
 
 handler = logging.StreamHandler()
-handler.setFormatter(
-    jsonlogger.JsonFormatter(
-        "%(asctime)s | %(levelname)-8s | %(message)s | %(module)s:%(lineno)d",
-        rename_fields={"asctime": "time"}
-    )
-)
+handler.setFormatter(JsonFormatter())
 logger.addHandler(handler)
 
 # ---------------------------------------------------------------------------
@@ -40,7 +46,7 @@ logger.addHandler(handler)
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
 
-# DEBUG LOG: Confirm environment variables are loaded
+# Debug log: Confirm environment variables are loaded
 logger.info(f"SUPABASE_URL set? {'✅ Yes' if SUPABASE_URL else '❌ No'}")
 logger.info(f"SUPABASE_ANON_KEY set? {'✅ Yes' if SUPABASE_ANON_KEY else '❌ No'}")
 
