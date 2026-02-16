@@ -1,5 +1,6 @@
 # main.py
 import os
+from dotenv import load_dotenv
 import logging
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
