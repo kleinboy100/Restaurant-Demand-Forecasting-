@@ -12,23 +12,28 @@ from prophet import Prophet
 app = FastAPI(title="Kota AI: Klerksdorp Edition")
 
 # --- SUPABASE CONFIG ---
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
+# --- SUPABASE CONFIG ---
+# ✅ MATCH YOUR .env EXACTLY (VITE_ prefix)
+SUPABASE_URL = os.getenv("VITE_SUPABASE_URL")            # <-- Correct .env name
+SUPABASE_ANON_KEY = os.getenv("VITE_SUPABASE_ANON_KEY")   # <-- Correct .env name
 
 # Validate and create Supabase client
 def get_supabase_client():
-    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
-        print("⚠️ Supabase credentials not set!")
+    # ✅ Now check the CORRECT variables
+    if not SUPABASE_URL or not SUPABASE_ANON_KEY:       # <--- Now defined above
+        missing = []
+        if not SUPABASE_URL: missing.append("VITE_SUPABASE_URL")
+        if not SUPABASE_ANON_KEY: missing.append("VITE_SUPABASE_ANON_KEY")
+        logger.warning(f"Supabase credentials missing: {', '.join(missing)}")
         return None
-    
+
     try:
-        client = create_client(SUPABASE_URL, SUPABASE_KEY)
-        # Test connection
+        client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
         test = client.table("order_items").select("*", count="exact").limit(1).execute()
-        print(f"✅ Supabase connected. Found {len(test.data) if test.data else 0} order items")
+        logger.info(f"✅ Supabase connected. Found {len(test.data)} order items")
         return client
     except Exception as e:
-        print(f"❌ Supabase connection failed: {str(e)}")
+        logger.error(f"❌ Supabase connection failed: {str(e)}")
         return None
 
 supabase = get_supabase_client()
