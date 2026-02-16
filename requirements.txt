@@ -7,4 +7,3 @@ numpy
 requests
 scikit-learn
 supabase==2.4.5
-pythonjsonlogger==2.0.7
