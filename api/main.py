@@ -13,7 +13,7 @@ app = FastAPI(title="Kota AI: Klerksdorp Edition")
 
 # --- SUPABASE CONFIG ---
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
 
 # Validate and create Supabase client
 def get_supabase_client():
