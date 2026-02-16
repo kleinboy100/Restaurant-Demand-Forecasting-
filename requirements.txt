@@ -6,3 +6,4 @@ pydantic
 numpy
 requests
 scikit-learn
+supabase
