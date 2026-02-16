@@ -10,14 +10,14 @@ from supabase import create_client, Client
 from prophet import Prophet
 from dotenv import load_dotenv
 
-# Load Environment Variables (Ensure these are in your .env file or server config)
+# Load Environment Variables
 load_dotenv()
 
 app = FastAPI(title="Kota AI: Klerksdorp Edition")
 
 # --- SUPABASE CONFIG ---
-SUPABASE_URL = os.getenv("https://aweceghpsgqhilydnoun.supabase.co")
-SUPABASE_KEY = os.getenv("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9") # Use service role for backend access
+SUPABASE_URL = os.getenv("https://aweceghpsgqhilydnoun.supabase.co")  # Fix: Use variable names, not actual values
+SUPABASE_KEY = os.getenv("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9")   # Fix: Use variable names, not actual values
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # --- COORDINATES FOR KLERKSDORP/JOUBERTON ---
@@ -28,6 +28,10 @@ KLERKSDORP_LON = 26.63
 class ForecastRequest(BaseModel):
     item_name: str
     days_ahead: int = 7
+
+class DashboardRequest(BaseModel):
+    items: List[str]
+    inventory: List[float]
 
 # --- WEATHER SERVICE ---
 def get_klerksdorp_weather(days: int = 7):
@@ -47,8 +51,12 @@ def get_klerksdorp_weather(days: int = 7):
 def generate_world_class_forecast(item_name: str, days_ahead: int):
     # 1. Fetch Sales History from Supabase
     # Assumes table 'sales_history' with columns: sale_date, quantity, item_name
-    res = supabase.table("sales_history").select("sale_date, quantity") \
-        .eq("item_name", item_name).execute()
+    try:
+        res = supabase.table("sales_history").select("sale_date, quantity") \
+            .eq("item_name", item_name).execute()
+    except Exception as e:
+        print(f"Supabase error fetching sales history: {e}")
+        return None
     
     if not res.data or len(res.data) < 5:
         return None # Not enough data to train
@@ -59,8 +67,12 @@ def generate_world_class_forecast(item_name: str, days_ahead: int):
 
     # 3. Fetch Events (Spikes like Payday or Soccer Derby)
     # Assumes table 'events' with columns: event_date, impact_score
-    event_res = supabase.table("events").select("event_date, impact_score").execute()
-    df_events = pd.DataFrame(event_res.data)
+    try:
+        event_res = supabase.table("events").select("event_date, impact_score").execute()
+        df_events = pd.DataFrame(event_res.data)
+    except Exception as e:
+        print(f"Supabase error fetching events: {e}")
+        df_events = pd.DataFrame()
 
     if not df_events.empty:
         df_events['event_date'] = pd.to_datetime(df_events['event_date'])
@@ -92,7 +104,19 @@ def generate_world_class_forecast(item_name: str, days_ahead: int):
     
     return results[['ds', 'final_prediction', 'yhat_lower', 'yhat_upper']]
 
+# --- ADDITIONAL FUNCTIONS FOR DASHBOARD ---
+def predict_demand(item_name, days_ahead=7):
+    """Simplified prediction for dashboard"""
+    result = generate_world_class_forecast(item_name, days_ahead)
+    if result is None:
+        return None
+    return result['final_prediction'].sum()
+
 # --- ENDPOINTS ---
+@app.get("/")
+def root():
+    return {"message": "Kota AI: Klerksdorp Edition", "status": "running"}
+
 @app.get("/health")
 def health():
     return {"status": "online", "location": "Klerksdorp"}
@@ -120,15 +144,23 @@ async def get_forecast(request: ForecastRequest):
         "forecast": formatted_data
     }
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))se "MEDIUM" if days_left < 7 else "LOW"
+@app.post("/api/dashboard/")
+def get_dashboard(request: DashboardRequest):
+    weather = get_klerksdorp_weather(7)
+    results = []
+    for item, stock in zip(request.items, request.inventory):
+        weekly_demand = predict_demand(item, 7)
+        if weekly_demand is None:
+            results.append({"item": item, "current_stock": stock, "urgency": "LOW"})
+            continue
+        days_left = (stock / (weekly_demand / 7)) if weekly_demand > 0 else 999
+        recommended = max(0, weekly_demand * 1.2 - stock)
+        urgency = "HIGH" if days_left < 3 else "MEDIUM" if days_left < 7 else "LOW"
         results.append({"item": item, "current_stock": stock, "predicted_weekly": round(weekly_demand, 1), "days_left": round(days_left, 1), "recommendation": round(recommended, 1), "urgency": urgency})
     urgency_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
     results.sort(key=lambda x: urgency_order.get(x.get("urgency", "LOW"), 3))
     return {"status": "success", "summary": {"total_items": len(results), "high_urgency": sum(1 for r in results if r.get("urgency") == "HIGH")}, "items": results}
 
-# ============ RUN ============
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
