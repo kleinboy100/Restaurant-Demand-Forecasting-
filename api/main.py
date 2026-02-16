@@ -45,7 +45,11 @@ logger.addHandler(handler)
 # 2. SUPABASE CONFIG — MATCH RENDER ENVIRONMENT (NOT VITE_)
 # ---------------------------------------------------------------------------
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
+SUPABASE_ANON_KEY = (
+    os.getenv("SUPABASE_ANON_KEY")
+    or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+    or os.getenv("SUPABASE_PUBLISHABLE_KEY")
+)
 
 # Debug log: Confirm environment variables are loaded
 logger.info(f"SUPABASE_URL set? {'✅ Yes' if SUPABASE_URL else '❌ No'}")
