@@ -85,9 +85,13 @@ def get_supabase_client() -> Optional[Client]:
 
     try:
         client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+        # Change these lines in get_supabase_client() and /health
         test = client.table("order_items").select("*", count="exact").limit(1).execute()
-        count = len(test.data) if test.data else 0
-        logger.info(f"✅ Supabase connected. Found {count} order items")
+
+# Use .count instead of len(.data)
+        count = test.count if test.count is not None else 0
+
+        logger.info(f"✅ Supabase connected. Total orders in DB: {count}")
         return client
     except Exception as e:
         logger.error(f"❌ Supabase connection failed: {str(e)}")
