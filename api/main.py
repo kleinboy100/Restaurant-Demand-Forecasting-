@@ -1,5 +1,8 @@
 # main.py
+# TEMPORARY DEBUG LOGS
 import os
+logger.info(f"System Check - URL in OS: {'Defined' if 'SUPABASE_URL' in os.environ else 'MISSING'}")
+logger.info(f"System Check - KEY in OS: {'Defined' if 'SUPABASE_ANON_KEY' in os.environ else 'MISSING'}")
 from dotenv import load_dotenv
 import logging
 from datetime import datetime, timedelta
