@@ -1,8 +1,6 @@
 # main.py
 # TEMPORARY DEBUG LOGS
 import os
-logger.info(f"System Check - URL in OS: {'Defined' if 'SUPABASE_URL' in os.environ else 'MISSING'}")
-logger.info(f"System Check - KEY in OS: {'Defined' if 'SUPABASE_ANON_KEY' in os.environ else 'MISSING'}")
 from dotenv import load_dotenv
 import logging
 from datetime import datetime, timedelta
@@ -19,7 +17,18 @@ from prophet import Prophet
 # ---------------------------------------------------------------------------
 # 0. LOAD ENVIRONMENT VARIABLES (FOR LOCAL DEVELOPMENT)
 # ---------------------------------------------------------------------------
-load_dotenv(override=False)  # Loads .env for local dev — backend ignores VITE_ prefixes
+load_dotenv(override=False) 
+
+# 2. SET UP LOGGER (Define logger FIRST)
+logger = logging.getLogger("kota-ai")
+logger.setLevel(logging.INFO)
+handler = logging.StreamHandler()
+# ... (add your formatter here as it was before)
+logger.addHandler(handler)
+
+# 3. NOW RUN THE DEBUG LOGS (logger is now defined)
+logger.info(f"DEBUG: SUPABASE_URL in OS? {'SUPABASE_URL' in os.environ}")
+logger.info(f"DEBUG: SUPABASE_ANON_KEY in OS? {'SUPABASE_ANON_KEY' in os.environ}")  # Loads .env for local dev — backend ignores VITE_ prefixes
 
 # ---------------------------------------------------------------------------
 # 1. SET UP STRUCTURED JSON LOGGING — NATIVE PYTHON 3.14+ COMPATIBLE
