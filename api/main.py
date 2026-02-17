@@ -16,7 +16,7 @@ from prophet import Prophet
 # ---------------------------------------------------------------------------
 # 0. LOAD ENVIRONMENT VARIABLES (FOR LOCAL DEVELOPMENT)
 # ---------------------------------------------------------------------------
-load_dotenv()  # Loads .env for local dev — backend ignores VITE_ prefixes
+load_dotenv(override=False)  # Loads .env for local dev — backend ignores VITE_ prefixes
 
 # ---------------------------------------------------------------------------
 # 1. SET UP STRUCTURED JSON LOGGING — NATIVE PYTHON 3.14+ COMPATIBLE
