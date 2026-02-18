@@ -542,4 +542,107 @@ async def dashboard_data(request: DashboardRequest):
             "Sausage": 8.0,
             "Chicken": 12.0,
             "Beef": 10.0,
-            "Potatoes": 1
+            "Potatoes": 15.0,
+            "Carrots": 8.0
+        }
+        
+        # Process each meal
+        for item in request.items:
+            try:
+                # Get current stock
+                current_stock = item.current_stock
+                if current_stock is None and supabase:
+                    try:
+                        stock_result = supabase.table("stock").select("current_stock").eq(
+                            "item_name", item.item_name
+                        ).execute()
+                        if stock_result.data:
+                            current_stock = stock_result.data[0]["current_stock"]
+                        else:
+                            current_stock = 0
+                    except:
+                        current_stock = 0
+                elif current_stock is None:
+                    current_stock = 0
+                
+                # Generate forecast
+                forecast_df = generate_world_class_forecast(item.item_name, 7)
+                
+                if forecast_df is None or forecast_df.empty:
+                    # Use fallback demand
+                    weekly_demand = fallback_demands.get(item.item_name, 5.0)
+                else:
+                    weekly_demand = forecast_df["final_prediction"].sum()
+                
+                # Calculate metrics
+                daily_demand = weekly_demand / 7
+                days_left = current_stock / daily_demand if daily_demand > 0 else float('inf')
+                recommended_order = max(0, (weekly_demand * 1.5) - current_stock)
+                
+                # Determine status
+                if days_left < 3:
+                    urgency = "HIGH"
+                    status = "CRITICAL"
+                    critical_count += 1
+                elif days_left < 7:
+                    urgency = "MEDIUM" 
+                    status = "LOW"
+                else:
+                    urgency = "LOW"
+                    status = "OK"
+                
+                total_recommended += recommended_order
+                
+                items_data.append({
+                    "item_name": item.item_name,
+                    "current_stock": current_stock,
+                    "weekly_demand": round(weekly_demand, 1),
+                    "days_left": round(days_left, 1) if days_left != float('inf') else 999,
+                    "recommended_order": round(recommended_order, 1),
+                    "urgency": urgency,
+                    "status": status,
+                    "action": "REORDER NOW" if urgency == "HIGH" else "Monitor stock"
+                })
+                
+            except Exception as e:
+                logger.error(f"Error processing {item.item_name}: {str(e)}")
+                # Add error item
+                items_data.append({
+                    "item_name": item.item_name,
+                    "current_stock": 0,
+                    "weekly_demand": 0,
+                    "days_left": 0,
+                    "recommended_order": 0,
+                    "urgency": "HIGH",
+                    "status": "ERROR",
+                    "action": "Check data"
+                })
+        
+        # Sort by urgency (HIGH first)
+        urgency_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+        items_data.sort(key=lambda x: urgency_order.get(x["urgency"], 3))
+        
+        return {
+            "summary": {
+                "total_items": len(items_data),
+                "critical_items": critical_count,
+                "total_recommended": round(total_recommended, 1),
+                "timestamp": datetime.now().isoformat()
+            },
+            "items": items_data
+        }
+        
+    except Exception as e:
+        logger.error(f"Dashboard error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Dashboard generation failed: {str(e)}")
+
+# Backward compatibility endpoint (exact same name)
+@app.post("/reorder-recommendations") 
+async def reorder_recommendations(request: DashboardRequest):
+    """Alias for dashboard endpoint (backward compatibility)"""
+    return await dashboard_data(request)
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
