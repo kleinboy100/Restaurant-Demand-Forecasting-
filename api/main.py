@@ -230,15 +230,13 @@ def get_sales_from_order_items(item_name: str, days_back: int = 90) -> pd.DataFr
 # 8. AI FORECAST ENGINE (Prophet + Weather Impact)
 # ---------------------------------------------------------------------------
 def generate_world_class_forecast(item_name: str, days_ahead: int) -> Optional[pd.DataFrame]:
-    if not supabase:
-        raise HTTPException(status_code=500, detail="Database not configured")
-
     df = get_sales_from_order_items(item_name)
 
-    if df.empty or len(df) < 5:
-        logger.warning(f"Insufficient data for {item_name} (needs ≥5 sales records)")
+    if df.empty or len(df) < 1:  # Changed to 1
+        # if fewer than 1 daily point, abort
         return None
 
+    # ... (rest of the function remains the same)
     # Add event impact (optional)
     df["impact_score"] = 1.0
     try:
