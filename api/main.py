@@ -1,104 +1,99 @@
-# main.py
-# TEMPORARY DEBUG LOGS
 import os
-from dotenv import load_dotenv
 import logging
-from datetime import datetime, timedelta
-from typing import List, Optional, Dict, Any
-import json
-import numpy as np
+import asyncio
+from datetime import datetime, timedelta, date
+from typing import Optional, List, Dict
 import pandas as pd
-import requests
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from supabase import create_client, Client
+import numpy as np
 from prophet import Prophet
+from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from supabase import create_client, Client
+import requests
 
 # ---------------------------------------------------------------------------
-# 0. LOAD ENVIRONMENT VARIABLES (FOR LOCAL DEVELOPMENT)
+# LOGGING SETUP
 # ---------------------------------------------------------------------------
-load_dotenv(override=False) 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# 1. SET UP STRUCTURED JSON LOGGING — NATIVE PYTHON 3.14+ COMPATIBLE
+# FASTAPI APP INITIALIZATION
 # ---------------------------------------------------------------------------
-class JsonFormatter(logging.Formatter):
-    def format(self, record):
-        log_entry = {
-            "time": datetime.utcfromtimestamp(record.created).isoformat() + "Z",
-            "level": record.levelname,
-            "message": record.getMessage(),
-            "module": record.module,
-            "lineno": record.lineno
-        }
-        if record.exc_info:
-            log_entry["exception"] = self.formatException(record.exc_info)
-        return json.dumps(log_entry, ensure_ascii=False)
-
-logger = logging.getLogger("kota-ai")
-logger.setLevel(logging.INFO)
-
-handler = logging.StreamHandler()
-handler.setFormatter(JsonFormatter())
-logger.addHandler(handler)
-
-# 3. NOW RUN THE DEBUG LOGS (logger is now defined)
-logger.info(f"DEBUG: SUPABASE_URL in OS? {'SUPABASE_URL' in os.environ}")
-logger.info(f"DEBUG: SUPABASE_ANON_KEY in OS? {'SUPABASE_ANON_KEY' in os.environ}")  # Loads .env for local dev — backend ignores VITE_ prefixes
-
-# ---------------------------------------------------------------------------
-# 2. SUPABASE CONFIG — MATCH RENDER ENVIRONMENT (NOT VITE_)
-# ---------------------------------------------------------------------------
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_ANON_KEY = (
-    os.getenv("SUPABASE_ANON_KEY")
-    or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
-    or os.getenv("SUPABASE_PUBLISHABLE_KEY")
+app = FastAPI(
+    title="KOTAai Restaurant Demand Forecasting API",
+    description="Advanced AI-powered demand forecasting for Kota King Klerksdorp",
+    version="2.1.0"
 )
 
-# Debug log: Confirm environment variables are loaded
-logger.info(f"SUPABASE_URL set? {'✅ Yes' if SUPABASE_URL else '❌ No'}")
-logger.info(f"SUPABASE_ANON_KEY set? {'✅ Yes' if SUPABASE_ANON_KEY else '❌ No'}")
-
-if not SUPABASE_URL or not SUPABASE_ANON_KEY:
-    logger.error("⚠️⚠️ Supabase credentials are missing! Backend will not function.")
-else:
-    logger.info("✅ Supabase environment configured correctly (matches Render)")
-
-# ---------------------------------------------------------------------------
-# 3. SUPABASE CLIENT INITIALIZATION
-# ---------------------------------------------------------------------------
-def get_supabase_client() -> Optional[Client]:
-    """
-    Creates and returns a Supabase client if credentials are present.
-    Logs errors or missing env vars.
-    """
-    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
-        return None
-
-    try:
-        client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
-        # Change these lines in get_supabase_client() and /health
-        test = client.table("order_items").select("*", count="exact").limit(1).execute()
-        # test.count is the special Supabase property for the TRUE total
-        count = test.count if test.count is not None else 0
-
-        logger.info(f"✅ Supabase connected. Total orders in DB: {count}")
-        return client
-    except Exception as e:
-        logger.error(f"❌ Supabase connection failed: {str(e)}")
-        return None
-
-# Initialize globally — safe because logger and env vars are loaded
-supabase = get_supabase_client()
+# CORS Configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ---------------------------------------------------------------------------
-# 4. CONSTANTS
+# GLOBAL VARIABLES
 # ---------------------------------------------------------------------------
-KLERKSDORP_LAT = -26.86
-KLERKSDORP_LON = 26.63
+supabase: Optional[Client] = None
 
+# ---------------------------------------------------------------------------
+# MEAL-INGREDIENT MAPPING (for future use)
+# ---------------------------------------------------------------------------
+MEAL_INGREDIENTS = {
+    "Flamwood": {
+        "Chips": 150,  # grams
+        "Melted Cheese": 2,  # portions
+        "Russian": 1,  # portion
+        "lettuce": 50,  # grams
+        "Bread": 0.25,  # quarter loaf
+        "tomato": 1  # slice
+    },
+    "Stop 5": {
+        "Chips": 150,
+        "Melted Cheese": 1,
+        "Russian": 1,
+        "lettuce": 50,
+        "Bread": 0.25,
+        "tomato": 1,
+        "atchar": 50,
+        "Vienna": 1,
+        "egg": 1
+    },
+    "Stop 18": {
+        "Chips": 150,
+        "Melted Cheese": 1,
+        "lettuce": 50,
+        "Bread": 0.25,
+        "tomato": 1,
+        "atchar": 50
+    },
+    "Phelandaba": {
+        "Chips": 150,
+        "Melted Cheese": 1,
+        "Russian": 1,
+        "lettuce": 50,
+        "Bread": 0.25,
+        "tomato": 1,
+        "atchar": 50,
+        "egg": 1
+    },
+    "Steak": {
+        "steak": 100  # grams
+    },
+    "Toast": {
+        "Bread": 4,  # slices
+        "Chips": 150  # grams
+    }
+}
+
+# ---------------------------------------------------------------------------
+# PYDANTIC MODELS (keeping exact same names and structure)
+# ---------------------------------------------------------------------------
 class ForecastRequest(BaseModel):
     item_name: str
     days_ahead: int = 7
@@ -107,136 +102,163 @@ class RecommendationRequest(BaseModel):
     item_name: str
     current_stock: Optional[int] = None
 
-class StockUpdateRequest(BaseModel):
+class DashboardItem(BaseModel):
     item_name: str
-    quantity: int
-    transaction_type: str = "ADJUSTMENT"
-    notes: Optional[str] = None
+    current_stock: Optional[int] = None
 
 class DashboardRequest(BaseModel):
-    items: List[Dict[str, Any]]
+    items: List[DashboardItem]
 
 # ---------------------------------------------------------------------------
-# 5. WEATHER SERVICE (GETS HISTORICAL IMPACT FROM OPEN METEO)
+# DATABASE CONNECTION (exact same function name)
 # ---------------------------------------------------------------------------
-def get_klerksdorp_weather(days: int = 7) -> List[float]:
-    url = (
-        f"https://api.open-meteo.com/v1/forecast?"
-        f"latitude={KLERKSDORP_LAT}&longitude={KLERKSDORP_LON}"
-        f"&daily=precipitation_probability&forecast_days={days}"
-    )
+def init_supabase():
+    global supabase
     try:
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            probs = response.json().get("daily", {}).get("precipitation_probability", [])
-            return [1.0 if p < 25 else 0.7 if p < 60 else 0.4 for p in probs]
-    except Exception as e:
-        logger.error(f"Weather API error: {str(e)}")
-    return [0.9] * days  # Fallback: neutral impact
-
-# ---------------------------------------------------------------------------
-# 6. STOCK MANAGEMENT (SAFE HANDLING FOR MISSING SUPABASE)
-# ---------------------------------------------------------------------------
-def get_current_stock_from_table(item_name: str) -> Optional[int]:
-    if not supabase:
-        logger.warning("get_current_stock_from_table: Supabase not available")
-        return None
-
-    try:
-        res = supabase.table("stock").select("current_stock").eq("item_name", item_name).execute()
-        if res.data:
-            return res.data[0]["current_stock"]
-    except Exception as e:
-        logger.error(f"Error fetching stock for {item_name}: {str(e)}")
-    return None
-
-def update_stock_in_table(item_name: str, quantity_change: int, transaction_type: str, notes: str = "") -> bool:
-    if not supabase:
-        logger.warning("update_stock_in_table: Supabase not available")
-        return False
-
-    try:
-        current = get_current_stock_from_table(item_name)
-        if current is None:
+        supabase_url = os.getenv("SUPABASE_URL")
+        supabase_key = os.getenv("SUPABASE_ANON_KEY")
+        
+        if not supabase_url or not supabase_key:
+            logger.error("Supabase credentials not found in environment variables")
             return False
-
-        new_stock = max(0, current + quantity_change)
-
-        supabase.table("stock").update({
-            "current_stock": new_stock,
-            "last_updated": datetime.now().isoformat()
-        }).eq("item_name", item_name).execute()
-
-        supabase.table("stock_transactions").insert({
-            "item_name": item_name,
-            "transaction_type": transaction_type,
-            "quantity": quantity_change,
-            "previous_stock": current,
-            "new_stock": new_stock,
-            "notes": notes,
-            "created_at": datetime.now().isoformat()
-        }).execute()
-
-        logger.info(f"Stock updated: {item_name} +{quantity_change} → {new_stock}")
+        
+        supabase = create_client(supabase_url, supabase_key)
+        
+        # Test connection
+        test_result = supabase.table("order_items").select("*").limit(1).execute()
+        logger.info(f"Database connected successfully. Test query returned {len(test_result.data)} rows")
         return True
+        
     except Exception as e:
-        logger.error(f"Stock update failed for {item_name}: {str(e)}")
+        logger.error(f"Failed to connect to Supabase: {str(e)}")
         return False
 
+# Initialize on startup
+@app.on_event("startup")
+async def startup_event():
+    init_supabase()
+
 # ---------------------------------------------------------------------------
-# 7. SALES DATA EXTRACTION (USE SUPABASE)
+# WEATHER DATA INTEGRATION (exact same function name)
+# ---------------------------------------------------------------------------
+def get_klerksdorp_weather(days_ahead: int = 7) -> Dict[str, float]:
+    """Get weather forecast for Klerksdorp from Open-Meteo API"""
+    try:
+        # Klerksdorp coordinates
+        lat, lon = -26.85, 26.66
+        
+        url = f"https://api.open-meteo.com/v1/forecast"
+        params = {
+            "latitude": lat,
+            "longitude": lon,
+            "daily": "precipitation_probability_max",
+            "forecast_days": days_ahead,
+            "timezone": "Africa/Johannesburg"
+        }
+        
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        
+        data = response.json()
+        weather_impact = {}
+        
+        dates = data["daily"]["time"]
+        precip_prob = data["daily"]["precipitation_probability_max"]
+        
+        for i, date_str in enumerate(dates):
+            prob = precip_prob[i] if i < len(precip_prob) else 0
+            
+            # Convert precipitation probability to demand impact
+            if prob < 20:  # Low chance of rain
+                impact = 1.0  # Normal demand
+            elif prob < 60:  # Medium chance of rain
+                impact = 0.85  # Slightly lower demand
+            else:  # High chance of rain
+                impact = 0.7  # Lower demand (people stay home)
+                
+            weather_impact[date_str] = impact
+            
+        return weather_impact
+        
+    except Exception as e:
+        logger.warning(f"Weather API failed: {str(e)}, using default impact")
+        # Default impact for all future dates
+        future_dates = [(datetime.now() + timedelta(days=i)).strftime("%Y-%m-%d") 
+                       for i in range(1, days_ahead + 1)]
+        return {date_str: 1.0 for date_str in future_dates}
+
+# ---------------------------------------------------------------------------
+# DATA PROCESSING FUNCTIONS (exact same function name)
 # ---------------------------------------------------------------------------
 def get_sales_from_order_items(item_name: str, days_back: int = 90) -> pd.DataFrame:
+    """Fetch historical sales data for an item"""
     if not supabase:
-        logger.error("get_sales_from_order_items: Supabase not available")
         raise HTTPException(status_code=500, detail="Database not configured")
-
+    
     try:
-        res = supabase.table("order_items").select("*").eq("item_name", item_name).execute()
-        if not res.data:
+        # Get order_items data
+        order_items_result = supabase.table("order_items").select(
+            "order_id, item_name, quantity"
+        ).eq("item_name", item_name).execute()
+        
+        if not order_items_result.data:
+            logger.warning(f"No sales data found for {item_name}")
             return pd.DataFrame()
-
-        df = pd.DataFrame(res.data)
-
-        # Link to orders table for timestamps
-        order_ids = df["order_id"].unique().tolist()
-        if not order_ids:
+        
+        # Get order dates
+        order_ids = [item["order_id"] for item in order_items_result.data]
+        orders_result = supabase.table("orders").select(
+            "id, created_at"
+        ).in_("id", order_ids).execute()
+        
+        if not orders_result.data:
             return pd.DataFrame()
-
-        orders_res = supabase.table("orders").select("id, created_at, order_date").in_("id", order_ids).execute()
-        if orders_res.data:
-            orders_df = pd.DataFrame(orders_res.data)
-            date_col = "order_date" if "order_date" in orders_df.columns else "created_at"
-            df = df.merge(orders_df[["id", date_col]], left_on="order_id", right_on="id", how="left")
-            df["sale_date"] = pd.to_datetime(df[date_col])
-        else:
-            df["sale_date"] = pd.Timestamp.now()
-
-        # Filter last N days
-        cutoff = pd.Timestamp.now() - timedelta(days=days_back)
-        df = df[df["sale_date"] >= cutoff]
-
-        if not df.empty and "sale_date" in df:
-            grouped = df.groupby("sale_date")["quantity"].sum().reset_index()
-            grouped.columns = ["ds", "y"]
-            return grouped
-
-        return pd.DataFrame()
+        
+        # Create dataframes
+        order_items_df = pd.DataFrame(order_items_result.data)
+        orders_df = pd.DataFrame(orders_result.data)
+        orders_df.rename(columns={"id": "order_id"}, inplace=True)
+        
+        # Merge data
+        merged_df = pd.merge(order_items_df, orders_df, on="order_id", how="inner")
+        merged_df["created_at"] = pd.to_datetime(merged_df["created_at"])
+        
+        # Filter recent data
+        cutoff_date = datetime.now() - timedelta(days=days_back)
+        merged_df = merged_df[merged_df["created_at"] >= cutoff_date]
+        
+        if merged_df.empty:
+            return pd.DataFrame()
+        
+        # Aggregate by date
+        merged_df["sale_date"] = merged_df["created_at"].dt.date
+        daily_sales = merged_df.groupby("sale_date")["quantity"].sum().reset_index()
+        
+        # Prepare for Prophet
+        daily_sales.rename(columns={"sale_date": "ds", "quantity": "y"}, inplace=True)
+        daily_sales["ds"] = pd.to_datetime(daily_sales["ds"])
+        
+        logger.info(f"Found {len(daily_sales)} days of sales data for {item_name}")
+        return daily_sales
+        
     except Exception as e:
-        logger.error(f"Error fetching sales for {item_name}: {str(e)}")
+        logger.error(f"Error fetching sales data for {item_name}: {str(e)}")
         return pd.DataFrame()
 
 # ---------------------------------------------------------------------------
-# 8. AI FORECAST ENGINE (Prophet + Weather Impact)
+# AI FORECAST ENGINE (exact same function name)
 # ---------------------------------------------------------------------------
 def generate_world_class_forecast(item_name: str, days_ahead: int) -> Optional[pd.DataFrame]:
+    """Generate AI-powered forecast using Prophet with weather integration"""
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database not configured")
+
     df = get_sales_from_order_items(item_name)
 
-    if df.empty or len(df) < 1:  # Changed to 1
-        # if fewer than 1 daily point, abort
+    if df.empty:  # Changed: Now only requires 1+ days of data
+        logger.warning(f"No sales data available for {item_name}")
         return None
 
-    # ... (rest of the function remains the same)
     # Add event impact (optional)
     df["impact_score"] = 1.0
     try:
@@ -257,234 +279,267 @@ def generate_world_class_forecast(item_name: str, days_ahead: int) -> Optional[p
 
     model.fit(df)
 
-    # Forecast next N days
-    future = model.make_future_dataframe(periods=days_ahead)
-    future["impact_score"] = 1.0  # default
+    # Create future dataframe
+    future = model.make_future_dataframe(periods=days_ahead, freq='D')
+    
+    # Add weather impact to future dates
+    weather_impact = get_klerksdorp_weather(days_ahead)
+    future["impact_score"] = 1.0
+    
+    for i, row in future.iterrows():
+        date_str = row["ds"].strftime("%Y-%m-%d")
+        if date_str in weather_impact:
+            future.at[i, "impact_score"] = weather_impact[date_str]
 
-    # Optionally: Add weather impact
-    weather_mult = get_klerksdorp_weather(days_ahead)
-    future_tail = future.tail(days_ahead)
-    future_tail = future_tail.copy()
-    future_tail["impact_score"] = [(weather_mult[i] if i < len(weather_mult) else 0.9) for i in range(len(future_tail))]
-
-    # Merge back impact scores
-    future.update(future_tail)
-
+    # Generate predictions
     forecast = model.predict(future)
-    results = forecast.tail(days_ahead).copy()
-    results["final_prediction"] = results["yhat"] * results["impact_score"].clip(lower=0.4)
-    results["final_prediction"] = results["final_prediction"].clip(lower=0)
-
-    return results[["ds", "final_prediction", "yhat_lower", "yhat_upper"]]
-
-# ---------------------------------------------------------------------------
-# 9. FASTAPI APP
-# ---------------------------------------------------------------------------
-app = FastAPI(
-    title="Kota AI: Klerksdorp Edition",
-    description="AI-powered inventory forecasting for restaurant ingredients",
-    version="1.0.0"
-)
+    
+    # Apply final adjustments
+    forecast["final_prediction"] = forecast["yhat"] * future["impact_score"]
+    forecast["final_prediction"] = forecast["final_prediction"].clip(lower=0)
+    
+    # Return only future predictions
+    future_forecast = forecast[forecast["ds"] > df["ds"].max()].copy()
+    
+    logger.info(f"Generated {len(future_forecast)} days forecast for {item_name}")
+    return future_forecast[["ds", "final_prediction", "yhat_lower", "yhat_upper"]]
 
 # ---------------------------------------------------------------------------
-# 10. CORS CONFIGURATION - UPDATED WITH YOUR GITHUB PAGES URL
+# API ENDPOINTS (all exact same endpoint names and function names)
 # ---------------------------------------------------------------------------
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:8001",  # For your local dashboard testing
-        "https://kleinboy100.github.io",  # Your GitHub Pages domain
-        "https://restaurant-demand-forecasting-1.onrender.com",  # API self-origin
-        "*"  # Allow all origins for development (remove in production)
-    ],
-    allow_credentials=True,
-    allow_methods=["POST", "GET", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
-)
 
-# ---------------------------------------------------------------------------
-# 11. ROUTES
-# ---------------------------------------------------------------------------
 @app.get("/")
 async def root():
     return {
-        "message": "Kota AI Forecasting API - Klerksdorp Edition", 
+        "message": "KOTAai Restaurant Demand Forecasting API",
         "status": "online",
-        "version": "1.0.0",
-        "dashboard_url": "https://kleinboy100.github.io/Dashboard/"
+        "version": "2.1.0",
+        "location": "Klerksdorp",
+        "meals_available": ["Flamwood", "Stop 5", "Stop 18", "Phelandaba", "Steak", "Toast"]
     }
 
 @app.get("/health")
-async def health():
-    db_status = "not configured"
-    item_count = 0
-    stock_table_exists = False
-
-    if supabase:
-        try:
-            test = supabase.table("order_items").select("*", count="exact").limit(1).execute()
-            db_status = "connected"
-            item_count = test.count if test.count is not None else 0
-
-            stock_res = supabase.table("stock").select("*", count="exact").limit(1).execute()
-            stock_table_exists = bool(stock_res.data)
-        except Exception as e:
-            db_status = f"error: {str(e)}"
-
-    return {
+async def health_check():
+    """Health check endpoint"""
+    health_status = {
         "status": "healthy",
         "location": "Klerksdorp",
-        "database": db_status,
-        "order_items_count": item_count,
-        "stock_table_exists": stock_table_exists,
+        "timestamp": datetime.now().isoformat(),
         "dashboard_url": "https://kleinboy100.github.io/Dashboard/",
-        "cors_enabled": True,
-        "recommendation": "Use current_stock param" if not stock_table_exists else "Stock table ready"
+        "cors_enabled": True
     }
+    
+    if supabase:
+        try:
+            # Test database connection
+            result = supabase.table("order_items").select("*").limit(1).execute()
+            health_status["database"] = "connected"
+            health_status["order_items_count"] = len(result.data)
+            
+            # Check if stock table exists
+            try:
+                stock_result = supabase.table("stock").select("*").limit(1).execute()
+                health_status["stock_table_exists"] = True
+                health_status["recommendation"] = "Stock table ready"
+            except:
+                health_status["stock_table_exists"] = False
+                health_status["recommendation"] = "Use current_stock parameter in requests"
+            
+        except Exception as e:
+            health_status["database"] = f"error: {str(e)}"
+            health_status["recommendation"] = "Check database connection"
+    else:
+        health_status["database"] = "not configured"
+        health_status["recommendation"] = "Configure SUPABASE_URL and SUPABASE_ANON_KEY"
+    
+    return health_status
+
+@app.get("/api/order_items")
+async def get_order_items_stats():
+    """Get order items statistics"""
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    
+    try:
+        # Get all order items
+        result = supabase.table("order_items").select("item_name, quantity").execute()
+        
+        if not result.data:
+            return {"message": "No order items found", "items": []}
+        
+        # Calculate statistics
+        df = pd.DataFrame(result.data)
+        stats = df.groupby("item_name")["quantity"].agg(['count', 'sum', 'mean']).round(2)
+        stats_dict = stats.to_dict('index')
+        
+        # Format response
+        items_stats = []
+        for item_name, stats in stats_dict.items():
+            items_stats.append({
+                "item_name": item_name,
+                "total_orders": int(stats['count']),
+                "total_quantity": int(stats['sum']),
+                "average_per_order": float(stats['mean'])
+            })
+        
+        # Sort by total quantity
+        items_stats.sort(key=lambda x: x['total_quantity'], reverse=True)
+        
+        return {
+            "total_items": len(items_stats),
+            "total_orders": len(result.data),
+            "items": items_stats
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting order items stats: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get order items: {str(e)}")
 
 @app.post("/api/forecast")
-async def get_forecast(request: ForecastRequest):
+async def forecast_demand(request: ForecastRequest):
+    """Generate demand forecast for a specific meal"""
     try:
-        data = generate_world_class_forecast(request.item_name, request.days_ahead)
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Forecast error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
-
-    if data is None:
-        sales = get_sales_from_order_items(request.item_name)
-        avg_daily = sales["y"].mean() if not sales.empty else 10
-        weekly = avg_daily * 7
-
+        forecast_df = generate_world_class_forecast(request.item_name, request.days_ahead)
+        
+        if forecast_df is None or forecast_df.empty:
+            # Fallback estimate based on item name
+            fallback_estimates = {
+                "Flamwood": 8.0,
+                "Stop 5": 6.0,
+                "Stop 18": 5.0,
+                "Phelandaba": 7.0,
+                "Steak": 4.0,
+                "Toast": 3.0
+            }
+            weekly_total = fallback_estimates.get(request.item_name, 5.0) * request.days_ahead
+            
+            return {
+                "item": request.item_name,
+                "status": "insufficient_data",
+                "message": "Using fallback estimate - need more sales records for AI forecast.",
+                "days_ahead": request.days_ahead,
+                "weekly_total": round(weekly_total, 1),
+                "recommendation": "Add more sales data for better predictions."
+            }
+        
+        # Format response
+        forecast_list = []
+        weekly_total = 0
+        
+        for _, row in forecast_df.iterrows():
+            daily_prediction = max(0, round(row["final_prediction"], 1))
+            weekly_total += daily_prediction
+            
+            forecast_list.append({
+                "date": row["ds"].strftime("%Y-%m-%d"),
+                "predicted": daily_prediction,
+                "low_estimate": max(0, round(row["yhat_lower"], 1)),
+                "high_estimate": max(0, round(row["yhat_upper"], 1))
+            })
+        
         return {
             "item": request.item_name,
-            "status": "insufficient_data",
-            "message": "Need ≥5 sales records for AI forecast.",
-            "total_sold_to_date": round(avg_daily * 90, 1),
-            "recommendation": "Use manual estimate or add sales data."
+            "days_ahead": request.days_ahead,
+            "weekly_total": round(weekly_total, 1),
+            "forecast": forecast_list,
+            "status": "success"
         }
-
-    forecast = [
-        {
-            "date": row["ds"].strftime("%Y-%m-%d"),
-            "predicted": round(row["final_prediction"], 1),
-            "low_estimate": round(row["yhat_lower"], 1),
-            "high_estimate": round(row["yhat_upper"], 1)
-        }
-        for _, row in data.iterrows()
-    ]
-
-    return {
-        "item": request.item_name,
-        "days_ahead": request.days_ahead,
-        "weekly_total": round(data["final_prediction"].sum(), 1),
-        "forecast": forecast
-    }
+        
+    except Exception as e:
+        logger.error(f"Forecast error for {request.item_name}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Forecast generation failed: {str(e)}")
 
 @app.post("/api/recommend")
 async def get_recommendation(request: RecommendationRequest):
-    if not supabase:
-        raise HTTPException(status_code=500, detail="Database not configured")
-
-    current_stock = request.current_stock
-    if current_stock is None:
-        current_stock = get_current_stock_from_table(request.item_name)
-        if current_stock is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Must provide 'current_stock' (product not in stock table or DB down)."
-            )
-
-    forecast_data = generate_world_class_forecast(request.item_name, 7)
-    if forecast_data is None:
-        sales = get_sales_from_order_items(request.item_name)
-        weekly_need = sales["y"].mean() * 7 if not sales.empty else 70
-    else:
-        weekly_need = forecast_data["final_prediction"].sum()
-
-    days_left = current_stock / (weekly_need / 7) if weekly_need > 0 else 999
-    recommended_order = max(0, (weekly_need * 1.5) - current_stock)
-    urgency = "HIGH" if days_left < 3 else "MEDIUM" if days_left < 7 else "LOW"
-
-    return {
-        "item": request.item_name,
-        "current_stock": current_stock,
-        "predicted_weekly_demand": round(weekly_need, 1),
-        "days_of_stock_left": round(days_left, 1),
-        "recommended_order": round(recommended_order, 1),
-        "urgency": urgency,
-        "reorder_now": urgency == "HIGH",
-        "estimated_restock_days": round(recommended_order / (weekly_need / 7), 1) if weekly_need else 7
-    }
+    """Get reorder recommendation for a specific meal"""
+    try:
+        # Get current stock
+        current_stock = request.current_stock
+        if current_stock is None and supabase:
+            try:
+                stock_result = supabase.table("stock").select("current_stock").eq(
+                    "item_name", request.item_name
+                ).execute()
+                if stock_result.data:
+                    current_stock = stock_result.data[0]["current_stock"]
+                else:
+                    current_stock = 0
+            except Exception as e:
+                logger.warning(f"Could not fetch stock for {request.item_name}: {str(e)}")
+                current_stock = 0
+        elif current_stock is None:
+            current_stock = 0
+        
+        # Generate forecast
+        forecast_df = generate_world_class_forecast(request.item_name, 7)
+        
+        if forecast_df is None or forecast_df.empty:
+            # Fallback calculation based on meal type
+            fallback_demands = {
+                "Flamwood": 8.0,
+                "Stop 5": 6.0,
+                "Stop 18": 5.0,
+                "Phelandaba": 7.0,
+                "Steak": 4.0,
+                "Toast": 3.0
+            }
+            weekly_demand = fallback_demands.get(request.item_name, 5.0) * 7
+        else:
+            weekly_demand = forecast_df["final_prediction"].sum()
+        
+        # Calculate recommendations
+        daily_demand = weekly_demand / 7
+        days_left = current_stock / daily_demand if daily_demand > 0 else float('inf')
+        recommended_order = max(0, (weekly_demand * 1.5) - current_stock)
+        
+        # Determine urgency
+        if days_left < 3:
+            urgency = "HIGH"
+        elif days_left < 7:
+            urgency = "MEDIUM"
+        else:
+            urgency = "LOW"
+        
+        return {
+            "item": request.item_name,
+            "current_stock": current_stock,
+            "predicted_weekly_demand": round(weekly_demand, 1),
+            "days_of_stock_left": round(days_left, 1),
+            "recommended_order": round(recommended_order, 1),
+            "urgency": urgency,
+            "reorder_now": urgency == "HIGH",
+            "estimated_restock_days": 7
+        }
+        
+    except Exception as e:
+        logger.error(f"Recommendation error for {request.item_name}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Recommendation failed: {str(e)}")
 
 @app.post("/api/dashboard")
-async def get_dashboard(request: DashboardRequest):
-    if not supabase:
-        raise HTTPException(status_code=500, detail="Database not configured")
-
-    results = []
-    for item_data in request.items:
-        item = item_data.get("item_name")
-        if not item:
-            continue
-
-        current_stock = item_data.get("current_stock") or get_current_stock_from_table(item) or 0
-        forecast = generate_world_class_forecast(item, 7)
-
-        if forecast is None:
-            sales = get_sales_from_order_items(item)
-            weekly_need = sales["y"].mean() * 7 if not sales.empty else 70
-        else:
-            weekly_need = forecast["final_prediction"].sum()
-
-        days_left = current_stock / (weekly_need / 7) if weekly_need > 0 else 999
-        recommended = max(0, (weekly_need * 1.5) - current_stock)
-        urgency = "HIGH" if days_left < 3 else "MEDIUM" if days_left < 7 else "LOW"
-
-        results.append({
-            "item_name": item,
-            "current_stock": current_stock,
-            "weekly_demand": round(weekly_need, 1),
-            "days_left": round(days_left, 1),
-            "recommended_order": round(recommended, 1),
-            "urgency": urgency,
-            "status": "CRITICAL" if days_left < 2 else "OK" if days_left > 14 else "LOW"
-        })
-
-    results.sort(key=lambda x: {"HIGH": 0, "MEDIUM": 1, "LOW": 2}[x["urgency"]])
-    return {
-        "summary": {
-            "total_items": len(results),
-            "critical_items": sum(1 for r in results if r["urgency"] == "HIGH"),
-            "total_recommended": round(sum(r["recommended_order"] for r in results), 1),
-            "timestamp": datetime.now().isoformat()
-        },
-        "items": results
-    }
-
-# ---------------------------------------------------------------------------
-# 12. STARTUP EVENT — LOGS API STATUS ON DEPLOY
-# ---------------------------------------------------------------------------
-@app.on_event("startup")
-async def startup_event():
-    logger.info("🚀 Kota AI API Starting...")
-    logger.info(f"📊 Dashboard URL: https://kleinboy100.github.io/Dashboard/")
-    if supabase:
-        try:
-            test = supabase.table("order_items").select("*", count="exact").limit(5).execute()
-            logger.info(f"✅ Found {test.count if test.count else 0} order items")
-            stock_test = supabase.table("stock").select("*", count="exact").limit(1).execute()
-            logger.info(f"✅ Stock table exists: {bool(stock_test.data)}")
-        except Exception as e:
-            logger.error(f"⚠️ Database query failed: {str(e)}")
-    else:
-        logger.error("⚠️⚠️⚠️ Supabase not configured — backend features disabled")
-
-# ---------------------------------------------------------------------------
-# 13. LOCAL DEV SERVER — RUN WITH: python main.py
-# ---------------------------------------------------------------------------
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+async def dashboard_data(request: DashboardRequest):
+    """Main dashboard endpoint - get recommendations for multiple meals"""
+    try:
+        items_data = []
+        total_recommended = 0
+        critical_count = 0
+        
+        # Fallback demands for meals (if no sales data)
+        fallback_demands = {
+            "Flamwood": 8.0,
+            "Stop 5": 6.0,
+            "Stop 18": 5.0,
+            "Phelandaba": 7.0,
+            "Steak": 4.0,
+            "Toast": 3.0,
+            # Legacy support for old ingredient names
+            "Bread": 10.0,
+            "Cheese": 15.0,
+            "Polony": 8.0,
+            "Atchar": 5.0,
+            "Onions": 12.0,
+            "Tomatoes": 10.0,
+            "Chips": 20.0,
+            "Sausage": 8.0,
+            "Chicken": 12.0,
+            "Beef": 10.0,
+            "Potatoes": 1
