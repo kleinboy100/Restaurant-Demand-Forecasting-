@@ -42,7 +42,7 @@ app.add_middleware(
 supabase: Optional[Client] = None
 
 # ---------------------------------------------------------------------------
-# MEAL-INGREDIENT MAPPING
+# MEAL-INGREDIENT MAPPING (not currently used)
 # ---------------------------------------------------------------------------
 MEAL_INGREDIENTS = {
     "Flamwood": {"Chips": 150, "Melted Cheese": 2, "Russian": 1, "lettuce": 50, "Bread": 0.25, "tomato": 1},
@@ -122,14 +122,17 @@ def get_klerksdorp_weather(days_ahead: int = 7) -> Dict[str, float]:
 # DATA PROCESSING FUNCTIONS
 # ---------------------------------------------------------------------------
 def get_sales_from_order_items(item_name: str, days_back: int = 90) -> pd.DataFrame:
-    if not supabase: raise HTTPException(status_code=500, detail="Database not configured")
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database not configured")
     try:
         order_items_result = supabase.table("order_items").select("order_id, item_name, quantity").eq("item_name", item_name).execute()
-        if not order_items_result.data: return pd.DataFrame()
+        if not order_items_result.data:
+            return pd.DataFrame()
         
         order_ids = [item["order_id"] for item in order_items_result.data]
         orders_result = supabase.table("orders").select("id, created_at").in_("id", order_ids).execute()
-        if not orders_result.data: return pd.DataFrame()
+        if not orders_result.data:
+            return pd.DataFrame()
         
         order_items_df = pd.DataFrame(order_items_result.data)
         orders_df = pd.DataFrame(orders_result.data).rename(columns={"id": "order_id"})
@@ -137,7 +140,8 @@ def get_sales_from_order_items(item_name: str, days_back: int = 90) -> pd.DataFr
         merged_df["created_at"] = pd.to_datetime(merged_df["created_at"])
         cutoff_date = datetime.now() - timedelta(days=days_back)
         merged_df = merged_df[merged_df["created_at"] >= cutoff_date]
-        if merged_df.empty: return pd.DataFrame()
+        if merged_df.empty:
+            return pd.DataFrame()
         
         merged_df["sale_date"] = merged_df["created_at"].dt.date
         daily_sales = merged_df.groupby("sale_date")["quantity"].sum().reset_index()
@@ -152,9 +156,11 @@ def get_sales_from_order_items(item_name: str, days_back: int = 90) -> pd.DataFr
 # AI FORECAST ENGINE
 # ---------------------------------------------------------------------------
 def generate_world_class_forecast(item_name: str, days_ahead: int) -> Optional[pd.DataFrame]:
-    if not supabase: raise HTTPException(status_code=500, detail="Database not configured")
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database not configured")
     df = get_sales_from_order_items(item_name)
-    if df.empty: return None
+    if df.empty:
+        return None
 
     model = Prophet(yearly_seasonality=False, weekly_seasonality=True, daily_seasonality=False)
     model.add_country_holidays(country_name="ZA")
@@ -171,7 +177,6 @@ def generate_world_class_forecast(item_name: str, days_ahead: int) -> Optional[p
 # ---------------------------------------------------------------------------
 # API ENDPOINTS
 # ---------------------------------------------------------------------------
-
 @app.get("/")
 async def root():
     return {"message": "KOTAai API", "status": "online", "version": "2.1.0"}
@@ -191,37 +196,50 @@ async def health_check():
 
 @app.post("/api/dashboard")
 async def dashboard_data(request: DashboardRequest):
-    """Main dashboard endpoint - updated to use ingredient_stock table"""
+    """Main dashboard endpoint to produce inventory and reorder recommendations"""
     try:
         items_data = []
         total_recommended = 0
         critical_count = 0
         
+        # Fallback demands (ensure names match the ingredient_stock table)
         fallback_demands = {
-            "Russian ": 12.0, "Bread": 25.0, "Lettuce": 8.0, "Cheese": 10.0, 
-            "Steak": 6.0, "Atchar": 5.0, "Vienna": 15.0, "Tomatoes": 10.0, "Burger": 12.0
+            "Chips": 500.0,
+            "Melted Cheese": 50.0,
+            "Russian": 12.0,
+            "lettuce": 8.0,
+            "Bread": 25.0,
+            "tomato": 10.0,
+            "atchar": 5.0,
+            "Vienna": 15.0,
+            "egg": 20.0,
+            "steak": 6.0
         }
         
         for item in request.items:
             try:
-                # 1. FETCH FROM ingredient_stock INSTEAD OF stock
+                # 1. FETCH CURRENT STOCK from ingredient_stock based on ingredient_name
                 current_stock = item.current_stock
                 if current_stock is None and supabase:
                     try:
-                        # Querying the specified ingredient_stock table
-                        stock_result = supabase.table("ingredient_stock").select("current_stock").eq(
-                            "item_name", item.item_name.strip()
-                        ).execute()
+                        lookup = item.item_name.strip()
+                        stock_result = supabase.table("ingredient_stock") \
+                            .select("ingredient_name, current_stock") \
+                            .ilike("ingredient_name", lookup) \
+                            .limit(1) \
+                            .execute()
                         
+                        logger.info(f"Querying stock for: '{lookup}'. Result: {stock_result.data}")
                         if stock_result.data:
                             current_stock = stock_result.data[0]["current_stock"]
                         else:
                             current_stock = 0
+                            logger.warning(f"No match found for '{lookup}' in ingredient_stock.")
                     except Exception as e:
                         logger.warning(f"Error reading ingredient_stock for {item.item_name}: {str(e)}")
                         current_stock = 0
                 
-                # 2. GENERATE FORECAST
+                # 2. GENERATE FORECAST using historical sales data
                 forecast_df = generate_world_class_forecast(item.item_name, 7)
                 weekly_demand = forecast_df["final_prediction"].sum() if forecast_df is not None else fallback_demands.get(item.item_name.strip(), 5.0)
                 
@@ -255,6 +273,7 @@ async def dashboard_data(request: DashboardRequest):
                 logger.error(f"Error processing {item.item_name}: {str(e)}")
                 items_data.append({"item_name": item.item_name, "current_stock": 0, "weekly_demand": 0, "days_left": 0, "recommended_order": 0, "urgency": "HIGH", "status": "ERROR", "action": "Check data"})
         
+        # Sort items by urgency: HIGH, MEDIUM, LOW
         urgency_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
         items_data.sort(key=lambda x: urgency_order.get(x["urgency"], 3))
         
