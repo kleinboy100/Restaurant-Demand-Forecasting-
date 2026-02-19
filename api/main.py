@@ -11,242 +11,245 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from supabase import create_client, Client
 import requests
+from uuid import uuid4
 
-# ---------------------------------------------------------------------------
-# LOGGING SETUP
-# ---------------------------------------------------------------------------
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# ... (keep existing logging and FastAPI setup) ...
 
-# ---------------------------------------------------------------------------
-# FASTAPI APP INITIALIZATION
-# ---------------------------------------------------------------------------
-app = FastAPI(
-    title="KOTAai Restaurant Demand Forecasting API",
-    description="Advanced AI-powered demand forecasting for Kota King Klerksdorp",
-    version="2.1.0"
-)
+# Add these Pydantic models
+class OrderMealRequest(BaseModel):
+    order_id: str  # UUID as string
+    meal_name: str
+    quantity: int
 
-# CORS Configuration
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+class MealIngredient(BaseModel):
+    id: str
+    order_id: str
+    meal_name: str
+    ingredient_name: str
+    quantity_used: float
+    unit: str
+    created_at: str
 
-# ---------------------------------------------------------------------------
-# GLOBAL VARIABLES
-# ---------------------------------------------------------------------------
-supabase: Optional[Client] = None
+# Add these endpoints to your FastAPI app
 
-# ---------------------------------------------------------------------------
-# MEAL-INGREDIENT MAPPING (not currently used)
-# ---------------------------------------------------------------------------
-MEAL_INGREDIENTS = {
-    "Flamwood": {"Chips": 150, "Melted Cheese": 2, "Russian": 1, "lettuce": 50, "Bread": 0.25, "tomato": 1},
-    "Stop 5": {"Chips": 150, "Melted Cheese": 1, "Russian": 1, "lettuce": 50, "Bread": 0.25, "tomato": 1, "atchar": 50, "Vienna": 1, "egg": 1},
-    "Stop 18": {"Chips": 150, "Melted Cheese": 1, "lettuce": 50, "Bread": 0.25, "tomato": 1, "atchar": 50},
-    "Phelandaba": {"Chips": 150, "Melted Cheese": 1, "Russian": 1, "lettuce": 50, "Bread": 0.25, "tomato": 1, "atchar": 50, "egg": 1},
-    "Steak": {"steak": 100},
-    "Toast": {"Bread": 4, "Chips": 150}
-}
-
-# ---------------------------------------------------------------------------
-# PYDANTIC MODELS
-# ---------------------------------------------------------------------------
-class ForecastRequest(BaseModel):
-    item_name: str
-    days_ahead: int = 7
-
-class RecommendationRequest(BaseModel):
-    item_name: str
-    current_stock: Optional[int] = None
-
-class DashboardItem(BaseModel):
-    item_name: str
-    current_stock: Optional[int] = None
-
-class DashboardRequest(BaseModel):
-    items: List[DashboardItem]
-
-# ---------------------------------------------------------------------------
-# DATABASE CONNECTION
-# ---------------------------------------------------------------------------
-def init_supabase():
-    global supabase
-    try:
-        supabase_url = os.getenv("SUPABASE_URL")
-        supabase_key = os.getenv("SUPABASE_ANON_KEY")
-        
-        if not supabase_url or not supabase_key:
-            logger.error("Supabase credentials not found in environment variables")
-            return False
-        
-        supabase = create_client(supabase_url, supabase_key)
-        test_result = supabase.table("order_items").select("*").limit(1).execute()
-        logger.info(f"Database connected successfully. Test query returned {len(test_result.data)} rows")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to connect to Supabase: {str(e)}")
-        return False
-
-@app.on_event("startup")
-async def startup_event():
-    init_supabase()
-
-# ---------------------------------------------------------------------------
-# WEATHER DATA INTEGRATION
-# ---------------------------------------------------------------------------
-def get_klerksdorp_weather(days_ahead: int = 7) -> Dict[str, float]:
-    try:
-        lat, lon = -26.85, 26.66
-        url = "https://api.open-meteo.com/v1/forecast"
-        params = {"latitude": lat, "longitude": lon, "daily": "precipitation_probability_max", "forecast_days": days_ahead, "timezone": "Africa/Johannesburg"}
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        weather_impact = {}
-        for i, date_str in enumerate(data["daily"]["time"]):
-            prob = data["daily"]["precipitation_probability_max"][i]
-            impact = 1.0 if prob < 20 else (0.85 if prob < 60 else 0.7)
-            weather_impact[date_str] = impact
-        return weather_impact
-    except Exception as e:
-        logger.warning(f"Weather API failed: {str(e)}")
-        future_dates = [(datetime.now() + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, days_ahead + 1)]
-        return {date_str: 1.0 for date_str in future_dates}
-
-# ---------------------------------------------------------------------------
-# DATA PROCESSING FUNCTIONS
-# ---------------------------------------------------------------------------
-def get_sales_from_order_items(item_name: str, days_back: int = 90) -> pd.DataFrame:
+@app.post("/api/process-meal-order")
+async def process_meal_order(order: OrderMealRequest):
+    """Process a meal order and update ingredient stock with unit handling"""
     if not supabase:
         raise HTTPException(status_code=500, detail="Database not configured")
-    try:
-        order_items_result = supabase.table("order_items").select("order_id, item_name, quantity").eq("item_name", item_name).execute()
-        if not order_items_result.data:
-            return pd.DataFrame()
-        
-        order_ids = [item["order_id"] for item in order_items_result.data]
-        orders_result = supabase.table("orders").select("id, created_at").in_("id", order_ids).execute()
-        if not orders_result.data:
-            return pd.DataFrame()
-        
-        order_items_df = pd.DataFrame(order_items_result.data)
-        orders_df = pd.DataFrame(orders_result.data).rename(columns={"id": "order_id"})
-        merged_df = pd.merge(order_items_df, orders_df, on="order_id", how="inner")
-        merged_df["created_at"] = pd.to_datetime(merged_df["created_at"])
-        cutoff_date = datetime.now() - timedelta(days=days_back)
-        merged_df = merged_df[merged_df["created_at"] >= cutoff_date]
-        if merged_df.empty:
-            return pd.DataFrame()
-        
-        merged_df["sale_date"] = merged_df["created_at"].dt.date
-        daily_sales = merged_df.groupby("sale_date")["quantity"].sum().reset_index()
-        daily_sales.rename(columns={"sale_date": "ds", "quantity": "y"}, inplace=True)
-        daily_sales["ds"] = pd.to_datetime(daily_sales["ds"])
-        return daily_sales
-    except Exception as e:
-        logger.error(f"Error fetching sales data: {str(e)}")
-        return pd.DataFrame()
-
-# ---------------------------------------------------------------------------
-# AI FORECAST ENGINE
-# ---------------------------------------------------------------------------
-def generate_world_class_forecast(item_name: str, days_ahead: int) -> Optional[pd.DataFrame]:
-    if not supabase:
-        raise HTTPException(status_code=500, detail="Database not configured")
-    df = get_sales_from_order_items(item_name)
-    if df.empty:
-        return None
-
-    model = Prophet(yearly_seasonality=False, weekly_seasonality=True, daily_seasonality=False)
-    model.add_country_holidays(country_name="ZA")
-    model.fit(df)
-
-    future = model.make_future_dataframe(periods=days_ahead, freq='D')
-    weather_impact = get_klerksdorp_weather(days_ahead)
-    future["impact_score"] = [weather_impact.get(d.strftime("%Y-%m-%d"), 1.0) for d in future["ds"]]
     
-    forecast = model.predict(future)
-    forecast["final_prediction"] = (forecast["yhat"] * future["impact_score"]).clip(lower=0)
-    return forecast[forecast["ds"] > df["ds"].max()].copy()
+    try:
+        # Get meal recipe from database
+        recipe_result = supabase.table("meal_recipes") \
+                              .select("*") \
+                              .eq("meal_name", order.meal_name) \
+                              .execute()
+        
+        if not recipe_result.data:
+            raise HTTPException(status_code=404, detail=f"Meal {order.meal_name} not found in recipes")
+        
+        # Process each ingredient in the recipe
+        total_depleted = 0
+        for recipe in recipe_result.data:
+            ingredient = recipe["ingredient_name"]
+            quantity_per_meal = recipe["quantity_per_meal"]
+            unit = recipe["unit"]
+            
+            # Calculate total quantity used
+            quantity_used = order.quantity * quantity_per_meal
+            
+            # Get current stock for the ingredient
+            stock_result = supabase.table("ingredient_stock") \
+                                .select("current_stock, unit") \
+                                .eq("ingredient_name", ingredient) \
+                                .execute()
+            
+            if stock_result.data:
+                current_stock = stock_result.data[0]["current_stock"]
+                stock_unit = stock_result.data[0]["unit"]
+                
+                # Handle unit conversions if needed
+                if unit != stock_unit:
+                    # Add unit conversion logic here if needed
+                    # For now, assume units match
+                    logger.warning(f"Unit mismatch for {ingredient}: recipe {unit} vs stock {stock_unit}")
+                
+                # Update current_stock
+                new_stock = max(0, current_stock - quantity_used)
+                
+                supabase.table("ingredient_stock") \
+                       .update({"current_stock": new_stock}) \
+                       .eq("ingredient_name", ingredient) \
+                       .execute()
+                
+                # Record ingredient usage
+                meal_ingredient_data = {
+                    "id": str(uuid4()),
+                    "order_id": order.order_id,
+                    "meal_name": order.meal_name,
+                    "ingredient_name": ingredient,
+                    "quantity_used": quantity_used,
+                    "unit": unit,
+                    "created_at": datetime.now().isoformat()
+                }
+                
+                supabase.table("meal_ingredients").insert(meal_ingredient_data).execute()
+                
+                total_depleted += quantity_used
+                logger.info(f"Updated {ingredient}: {current_stock} -> {new_stock} (used {quantity_used} {unit})")
+            else:
+                logger.warning(f"Ingredient {ingredient} not found in stock")
+        
+        return {
+            "status": "success",
+            "order_id": order.order_id,
+            "meal_name": order.meal_name,
+            "quantity": order.quantity,
+            "total_depleted": round(total_depleted, 2)
+        }
+    
+    except Exception as e:
+        logger.error(f"Error processing meal order: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-# ---------------------------------------------------------------------------
-# API ENDPOINTS
-# ---------------------------------------------------------------------------
-@app.get("/")
-async def root():
-    return {"message": "KOTAai API", "status": "online", "version": "2.1.0"}
+@app.get("/api/ingredient-usage/{ingredient_name}")
+async def get_ingredient_usage(ingredient_name: str, days_back: int = 7):
+    """Get usage history for a specific ingredient"""
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    
+    try:
+        # Calculate date range
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days_back)
+        
+        # Get ingredient usage
+        usage_result = supabase.table("meal_ingredients") \
+                             .select("*") \
+                             .eq("ingredient_name", ingredient_name) \
+                             .gte("created_at", start_date.isoformat()) \
+                             .execute()
+        
+        # Group by date
+        usage_by_date = {}
+        for record in usage_result.data:
+            date = record["created_at"].split("T")[0]
+            if date not in usage_by_date:
+                usage_by_date[date] = 0
+            usage_by_date[date] += record["quantity_used"]
+        
+        return {
+            "ingredient_name": ingredient_name,
+            "days_back": days_back,
+            "usage_by_date": usage_by_date,
+            "total_usage": sum(usage_by_date.values())
+        }
+    
+    except Exception as e:
+        logger.error(f"Error getting ingredient usage: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/health")
-async def health_check():
-    health_status = {"status": "healthy", "timestamp": datetime.now().isoformat()}
-    if supabase:
-        try:
-            # Check for ingredient_stock table
-            supabase.table("ingredient_stock").select("*").limit(1).execute()
-            health_status["database"] = "connected"
-            health_status["stock_table"] = "ingredient_stock"
-        except Exception as e:
-            health_status["database"] = f"error: {str(e)}"
-    return health_status
+@app.get("/api/real-time-stock")
+async def get_real_time_stock():
+    """Get current stock levels for all ingredients"""
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    
+    try:
+        stock_result = supabase.table("ingredient_stock").select("*").execute()
+        
+        # Get usage for today
+        today = datetime.now().strftime("%Y-%m-%d")
+        today_usage_result = supabase.table("meal_ingredients") \
+                                   .select("*") \
+                                   .ilike("created_at", f"{today}%") \
+                                   .execute()
+        
+        # Calculate today's usage per ingredient
+        today_usage = {}
+        for record in today_usage_result.data:
+            ingredient = record["ingredient_name"]
+            if ingredient not in today_usage:
+                today_usage[ingredient] = 0
+            today_usage[ingredient] += record["quantity_used"]
+        
+        # Combine stock and usage data
+        stock_data = []
+        for item in stock_result.data:
+            stock_data.append({
+                "ingredient_name": item["ingredient_name"],
+                "current_stock": item["current_stock"],
+                "unit": item["unit"],
+                "min_stock_level": item["min_stock_level"],
+                "max_stock_level": item["max_stock_level"],
+                "today_usage": today_usage.get(item["ingredient_name"], 0),
+                "remaining_stock": max(0, item["current_stock"] - today_usage.get(item["ingredient_name"], 0))
+            })
+        
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "stock_data": stock_data
+        }
+    
+    except Exception as e:
+        logger.error(f"Error getting real-time stock: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
+# Update your dashboard endpoint to include depleted quantity
 @app.post("/api/dashboard")
 async def dashboard_data(request: DashboardRequest):
-    """Main dashboard endpoint to produce inventory and reorder recommendations"""
+    """Main dashboard endpoint with real-time stock and depleted quantity"""
     try:
         items_data = []
         total_recommended = 0
         critical_count = 0
         
-        # Fallback demands (ensure names match the ingredient_stock table)
-        fallback_demands = {
-            "Chips": 500.0,
-            "Melted Cheese": 50.0,
-            "Russian": 12.0,
-            "lettuce": 8.0,
-            "Bread": 25.0,
-            "tomato": 10.0,
-            "atchar": 5.0,
-            "Vienna": 15.0,
-            "egg": 20.0,
-            "steak": 6.0
-        }
+        # Get today's usage for all ingredients
+        today = datetime.now().strftime("%Y-%m-%d")
+        today_usage_result = supabase.table("meal_ingredients") \
+                                   .select("*") \
+                                   .ilike("created_at", f"{today}%") \
+                                   .execute()
+        
+        today_usage = {}
+        for record in today_usage_result.data:
+            ingredient = record["ingredient_name"]
+            if ingredient not in today_usage:
+                today_usage[ingredient] = 0
+            today_usage[ingredient] += record["quantity_used"]
         
         for item in request.items:
             try:
-                # 1. FETCH CURRENT STOCK from ingredient_stock based on ingredient_name
+                # 1. FETCH CURRENT STOCK from ingredient_stock
                 current_stock = item.current_stock
                 if current_stock is None and supabase:
                     try:
                         lookup = item.item_name.strip()
                         stock_result = supabase.table("ingredient_stock") \
-                            .select("ingredient_name, current_stock") \
+                            .select("ingredient_name, current_stock, unit") \
                             .ilike("ingredient_name", lookup) \
                             .limit(1) \
                             .execute()
                         
-                        logger.info(f"Querying stock for: '{lookup}'. Result: {stock_result.data}")
                         if stock_result.data:
                             current_stock = stock_result.data[0]["current_stock"]
                         else:
                             current_stock = 0
-                            logger.warning(f"No match found for '{lookup}' in ingredient_stock.")
                     except Exception as e:
                         logger.warning(f"Error reading ingredient_stock for {item.item_name}: {str(e)}")
                         current_stock = 0
                 
-                # 2. GENERATE FORECAST using historical sales data
-                forecast_df = generate_world_class_forecast(item.item_name, 7)
-                weekly_demand = forecast_df["final_prediction"].sum() if forecast_df is not None else fallback_demands.get(item.item_name.strip(), 5.0)
+                # 2. GET TODAY'S USAGE
+                today_usage_amount = today_usage.get(item.item_name.strip(), 0)
                 
-                # 3. CALCULATE METRICS
+                # 3. GENERATE FORECAST
+                forecast_df = generate_world_class_forecast(item.item_name, 7)
+                weekly_demand = forecast_df["final_prediction"].sum() if forecast_df is not None else 5.0
+                
+                # 4. CALCULATE METRICS
                 daily_demand = weekly_demand / 7
-                days_left = current_stock / daily_demand if daily_demand > 0 else 999
-                recommended_order = max(0, (weekly_demand * 1.5) - current_stock)
+                days_left = (current_stock - today_usage_amount) / daily_demand if daily_demand > 0 else 999
+                recommended_order = max(0, (weekly_demand * 1.5) - (current_stock - today_usage_amount))
                 
                 if days_left < 3:
                     urgency, status = "HIGH", "CRITICAL"
@@ -261,6 +264,7 @@ async def dashboard_data(request: DashboardRequest):
                 items_data.append({
                     "item_name": item.item_name,
                     "current_stock": current_stock,
+                    "today_usage": round(today_usage_amount, 2),
                     "weekly_demand": round(weekly_demand, 1),
                     "days_left": round(days_left, 1),
                     "recommended_order": round(recommended_order, 1),
@@ -271,9 +275,9 @@ async def dashboard_data(request: DashboardRequest):
                 
             except Exception as e:
                 logger.error(f"Error processing {item.item_name}: {str(e)}")
-                items_data.append({"item_name": item.item_name, "current_stock": 0, "weekly_demand": 0, "days_left": 0, "recommended_order": 0, "urgency": "HIGH", "status": "ERROR", "action": "Check data"})
+                items_data.append({"item_name": item.item_name, "current_stock": 0, "today_usage": 0, "weekly_demand": 0, "days_left": 0, "recommended_order": 0, "urgency": "HIGH", "status": "ERROR", "action": "Check data"})
         
-        # Sort items by urgency: HIGH, MEDIUM, LOW
+        # Sort items by urgency
         urgency_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
         items_data.sort(key=lambda x: urgency_order.get(x["urgency"], 3))
         
@@ -289,11 +293,3 @@ async def dashboard_data(request: DashboardRequest):
     except Exception as e:
         logger.error(f"Dashboard error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/reorder-recommendations") 
-async def reorder_recommendations(request: DashboardRequest):
-    return await dashboard_data(request)
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
