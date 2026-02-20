@@ -12,8 +12,8 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="KOTAai Ingredient Intelligence API",
-    description="Ingredient tracking verified against your Supabase tables",
-    version="3.1.0"
+    description="Real-time ingredient tracking with historical demand forecasting",
+    version="4.0.0"
 )
 
 app.add_middleware(
@@ -54,9 +54,9 @@ async def startup_event():
 def get_ingredient_usage(target_date: Optional[date] = None) -> Dict[str, float]:
     """
     CALCULATES INGREDIENT USAGE FROM 3 SUPABASE TABLES:
-    1. orders → Orders created today (SAST timezone)
+    1. orders → Orders created on target_date (SAST timezone)
     2. order_items → Meals sold (item_name, quantity)
-    3. meal_recipes → Ingredient mappings (meal_name → ingredient + qty + unit)
+    3. meal_recipes → Ingredient mappings (meal_name → ingredient + qty)
     
     RETURNS: { "chips": 450.0, "bread": 30.0, ... } (normalized lowercase keys)
     """
@@ -68,13 +68,13 @@ def get_ingredient_usage(target_date: Optional[date] = None) -> Dict[str, float]
         if target_date is None:
             target_date = datetime.now(sast_tz).date()
         
-        # Convert SAST boundaries → UTC for Supabase query
+        # Convert SAST date boundaries → UTC for Supabase query
         start_sast = datetime(target_date.year, target_date.month, target_date.day, 0, 0, 0, tzinfo=sast_tz)
         end_sast = start_sast + timedelta(days=1)
         start_utc = start_sast.astimezone(timezone.utc).isoformat()
         end_utc = end_sast.astimezone(timezone.utc).isoformat()
         
-        # STEP 1: Get today's orders
+        # STEP 1: Get orders for target date
         orders = supabase.table("orders")\
             .select("id")\
             .gte("created_at", start_utc)\
@@ -145,12 +145,11 @@ def get_ingredient_usage(target_date: Optional[date] = None) -> Dict[str, float]
         return usage
         
     except Exception as e:
-        logger.exception(f"UsageId calculation failed: {str(e)}")
+        logger.exception(f"Usage calculation failed: {str(e)}")
         return {}
 
 # ============================================================================
-# ✅ DEBUG ENDPOINT: OPEN THIS IN BROWSER AFTER DEPLOYING THIS FILE
-# URL: https://restaurant-demand-forecasting-1.onrender.com/api/debug/ingredient-flow
+# ✅ DEBUG ENDPOINT: Verify data flow
 # ============================================================================
 @app.get("/api/debug/ingredient-flow")
 async def debug_ingredient_flow():
@@ -205,37 +204,38 @@ async def debug_ingredient_flow():
         return {"status": "error", "message": str(e)}
 
 # ============================================================================
-# EXISTING ENDPOINTS (UNCHANGED - YOUR FRONTEND WORKS PERFECTLY)
+# 🔑 MAIN DASHBOARD ENDPOINT (WITH HISTORICAL DEMAND CALCULATION)
 # ============================================================================
-@app.post("/api/usage-history")
-async def usage_history(request: UsageHistoryRequest):
-    try:
-        target_date = datetime.strptime(request.target_date, "%Y-%m-%d").date()
-        usage = get_ingredient_usage(target_date)
-        amount = usage.get(" ".join(request.ingredient_name.strip().lower().split()), 0.0)
-        return {
-            "date": request.target_date,
-            "ingredient": request.ingredient_name,
-            "amount_used": round(amount, 2),
-            "unit": "units"
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"History error: {str(e)}")
-
 @app.post("/api/dashboard")
 async def dashboard_data(request: DashboardRequest):
     try:
+        # Get today's usage
         today_usage = get_ingredient_usage()
-        items_data = []
-        total_recommended = 0.0
-        critical_count = 0
         
-        # Fallback demands keyed by normalized ingredient name
+        # 🔥 CRITICAL FIX: Calculate demand from ACTUAL SALES (last 7 days)
+        sast_tz = timezone(timedelta(hours=2))
+        today_date = datetime.now(sast_tz).date()
+        historical_usage = {}  # {ingredient_key: total_quantity_used_in_7_days}
+        
+        logger.info(f"📊 Calculating historical demand (last 7 days)...")
+        for days_ago in range(7):
+            check_date = today_date - timedelta(days=days_ago)
+            daily_usage = get_ingredient_usage(check_date)
+            for ing_key_hist, qty in daily_usage.items():
+                historical_usage[ing_key_hist] = historical_usage.get(ing_key_hist, 0.0) + qty
+        
+        logger.info(f"✅ Historical usage calculated for {len(historical_usage)} ingredients")
+        
+        # Fallback ONLY for brand-new ingredients with zero history
         fallback_demands = {
             "chips": 500.0, "melted cheese": 50.0, "russian": 12.0, "lettuce": 8.0,
             "bread": 25.0, "tomato": 10.0, "atchar": 5.0, "vienna": 15.0,
             "egg": 20.0, "steak": 6.0
         }
+        
+        items_data = []
+        total_recommended = 0.0
+        critical_count = 0
         
         for item in request.items:
             ing_name = item.item_name.strip()
@@ -254,8 +254,14 @@ async def dashboard_data(request: DashboardRequest):
             # Daily usage (today)
             daily_used = today_usage.get(ing_key, 0.0)
             
-            # Weekly demand (fallback only - ingredient-focused)
-            weekly_demand = fallback_demands.get(ing_key, 10.0)
+            # ✅ FIXED: Use REAL SALES DATA for demand forecasting
+            total_used_7_days = historical_usage.get(ing_key, 0.0)
+            if total_used_7_days > 0:
+                weekly_demand = total_used_7_days  # Project same usage for next week
+                logger.info(f"✅ {ing_name}: Historical demand = {weekly_demand:.1f} (from actual sales)")
+            else:
+                weekly_demand = fallback_demands.get(ing_key, 10.0)
+                logger.warning(f"⚠️ {ing_name}: Using fallback demand = {weekly_demand:.1f} (no historical data)")
             
             # Metrics
             daily_demand = weekly_demand / 7
@@ -301,13 +307,38 @@ async def dashboard_data(request: DashboardRequest):
         logger.exception(f"Dashboard error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# ============================================================================
+# USAGE HISTORY ENDPOINT
+# ============================================================================
+@app.post("/api/usage-history")
+async def usage_history(request: UsageHistoryRequest):
+    try:
+        target_date = datetime.strptime(request.target_date, "%Y-%m-%d").date()
+        usage = get_ingredient_usage(target_date)
+        amount = usage.get(" ".join(request.ingredient_name.strip().lower().split()), 0.0)
+        return {
+            "date": request.target_date,
+            "ingredient": request.ingredient_name,
+            "amount_used": round(amount, 2),
+            "unit": "units"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"History error: {str(e)}")
+
+# ============================================================================
+# HEALTH CHECK
+# ============================================================================
 @app.get("/health")
 async def health_check():
     return {
         "status": "healthy",
-        "version": "3.1.0",
+        "version": "4.0.0",
         "database": "connected" if supabase else "disconnected",
-        "debug_endpoint": "/api/debug/ingredient-flow"
+        "features": {
+            "realtime_usage": "enabled",
+            "historical_demand": "enabled",
+            "debug_endpoint": "/api/debug/ingredient-flow"
+        }
     }
 
 if __name__ == "__main__":
