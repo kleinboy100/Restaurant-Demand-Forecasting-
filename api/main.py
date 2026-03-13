@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, date, timezone
 from typing import Optional, List, Dict
 from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse  # <--- NEW IMPORT ADDED
 from fastapi.middleware.cors import CORSMiddleware
 from supabase import create_client, Client
 
@@ -341,6 +342,29 @@ async def health_check():
         }
     }
 
+# ============================================================================
+# 🏠 NEW: SERVE THE DASHBOARD HTML FILE
+# ============================================================================
+@app.get("/", response_class=HTMLResponse)
+async def serve_dashboard():
+    """Serves the index.html file as the homepage"""
+    try:
+        # Assumes index.html is in the same directory as main.py
+        file_path = os.path.join(os.path.dirname(__file__), "index.html")
+        with open(file_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return """
+        <html>
+            <body style='font-family: sans-serif; text-align: center; padding: 50px;'>
+                <h1>Dashboard Not Found</h1>
+                <p>Please ensure you have created the <b>index.html</b> file in your repository root.</p>
+            </body>
+        </html>
+        """
+
 if __name__ == "__main__":
     import uvicorn
+    # Standard Render deployment port is usually handled by environment variable, 
+    # but for local testing or specific start commands:
     uvicorn.run(app, host="0.0.0.0", port=8000)
