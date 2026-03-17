@@ -2,6 +2,7 @@ import os
 import logging
 from datetime import datetime, timedelta, date, timezone
 from typing import Optional, List, Dict
+
 from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="KOTAai Ingredient Intelligence API",
     description="Real-time ingredient tracking with historical demand forecasting",
-    version="4.1.0"  # Updated version
+    version="4.1.0"
 )
 
 app.add_middleware(
@@ -38,7 +39,6 @@ class UsageHistoryRequest(BaseModel):
     target_date: str
     ingredient_name: str
 
-# Fallback demands for new ingredients
 FALLBACK_DEMANDS = {
     "chips": 500.0, "cheese": 50.0, "russian": 12.0, "lettuce": 8.0,
     "bread": 25.0, "tomato": 10.0, "atchaar": 5.0, "vienna": 15.0,
@@ -52,7 +52,7 @@ async def startup_event():
         supabase_url = os.getenv("SUPABASE_URL")
         supabase_key = os.getenv("SUPABASE_ANON_KEY")
         if not supabase_url or not supabase_key:
-            logger.error("❌ Supabase credentials missing")
+            logger.warning("⚠️ Supabase credentials missing - running without DB")
             return
         supabase = create_client(supabase_url, supabase_key)
         logger.info("✅ Database connected successfully")
@@ -60,7 +60,6 @@ async def startup_event():
         logger.error(f"❌ Database connection failed: {str(e)}")
 
 def get_ingredient_usage(target_date: Optional[date] = None) -> Dict[str, float]:
-    """Calculates ingredient usage from Supabase tables"""
     if not supabase:
         return {}
     
@@ -74,7 +73,6 @@ def get_ingredient_usage(target_date: Optional[date] = None) -> Dict[str, float]
         start_utc = start_sast.astimezone(timezone.utc).isoformat()
         end_utc = end_sast.astimezone(timezone.utc).isoformat()
         
-        # Get orders for target date
         orders = supabase.table("orders")\
             .select("id")\
             .gte("created_at", start_utc)\
@@ -86,7 +84,6 @@ def get_ingredient_usage(target_date: Optional[date] = None) -> Dict[str, float]
 
         order_ids = [o["id"] for o in orders.data]
         
-        # Get meals sold
         items = supabase.table("order_items")\
             .select("item_name, quantity")\
             .in_("order_id", order_ids)\
@@ -95,7 +92,6 @@ def get_ingredient_usage(target_date: Optional[date] = None) -> Dict[str, float]
         if not items.data:
             return {}
 
-        # Load recipe mappings
         recipes = supabase.table("meal_recipes")\
             .select("meal_name, ingredient_name, quantity_per_meal")\
             .execute()
@@ -103,7 +99,6 @@ def get_ingredient_usage(target_date: Optional[date] = None) -> Dict[str, float]
         if not recipes.data:
             return {}
 
-        # Calculate usage
         recipe_map = {}
         for r in recipes.data:
             meal_key = " ".join(r["meal_name"].strip().lower().split())
@@ -130,6 +125,37 @@ def get_ingredient_usage(target_date: Optional[date] = None) -> Dict[str, float]
         logger.exception(f"Usage calculation failed: {str(e)}")
         return {}
 
+# ============================================================================
+# ROOT ROUTE - SERVES THE HTML DASHBOARD
+# ============================================================================
+@app.get("/", response_class=HTMLResponse)
+async def serve_dashboard():
+    """Serves the index.html dashboard"""
+    try:
+        file_path = os.path.join(os.path.dirname(__file__), "index.html")
+        with open(file_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return """
+        <html>
+            <body style='font-family: sans-serif; text-align: center; padding: 50px;'>
+                <h1>Dashboard Not Found</h1>
+                <p>Please ensure you have created the <b>index.html</b> file in your repository root.</p>
+            </body>
+        </html>
+        """
+
+# ============================================================================
+# API ENDPOINTS
+# ============================================================================
+@app.get("/health")
+async def health_check():
+    return {
+        "status": "healthy",
+        "version": "4.1.0",
+        "database": "connected" if supabase else "disconnected"
+    }
+
 @app.post("/api/dashboard")
 async def dashboard_data(request: DashboardRequest):
     try:
@@ -138,7 +164,6 @@ async def dashboard_data(request: DashboardRequest):
         today_date = datetime.now(sast_tz).date()
         historical_usage = {}
 
-        # Calculate historical demand
         for days_ago in range(7):
             check_date = today_date - timedelta(days=days_ago)
             daily_usage = get_ingredient_usage(check_date)
@@ -150,7 +175,6 @@ async def dashboard_data(request: DashboardRequest):
             ing_name = item.item_name.strip()
             ing_key = " ".join(ing_name.lower().split())
             
-            # Get current stock - either from request or Supabase
             current_stock = item.current_stock if item.current_stock is not None else 0.0
             if supabase and current_stock == 0:
                 try:
@@ -167,7 +191,6 @@ async def dashboard_data(request: DashboardRequest):
             daily_used = today_usage.get(ing_key, 0.0)
             total_used_7_days = historical_usage.get(ing_key, 0.0)
             
-            # Calculate metrics
             weekly_demand = total_used_7_days if total_used_7_days > 0 else FALLBACK_DEMANDS.get(ing_key, 10.0)
             daily_demand = weekly_demand / 7
             days_left = current_stock / daily_demand if daily_demand > 0 else 999
@@ -192,7 +215,6 @@ async def dashboard_data(request: DashboardRequest):
                 "action": "REORDER NOW" if urgency == "HIGH" else "Monitor stock"
             })
         
-        # Sort by urgency
         items_data.sort(key=lambda x: {"HIGH": 0, "MEDIUM": 1, "LOW": 2}.get(x["urgency"], 3))
         
         return {
@@ -208,8 +230,23 @@ async def dashboard_data(request: DashboardRequest):
         logger.exception(f"Dashboard error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# ... (keep other endpoints the same as in your original code)
+@app.post("/api/usage-history")
+async def usage_history(request: UsageHistoryRequest):
+    try:
+        target_date = datetime.strptime(request.target_date, "%Y-%m-%d").date()
+        usage = get_ingredient_usage(target_date)
+        norm_name = " ".join(request.ingredient_name.strip().lower().split())
+        amount = usage.get(norm_name, 0.0)
+        return {
+            "date": request.target_date,
+            "ingredient": request.ingredient_name,
+            "amount_used": round(amount, 2),
+            "unit": "units"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"History error: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
