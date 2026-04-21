@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>KOTAai Dashboard | Kota King</title>
+  <title>KOTAai Dashboard | Kota King Klerksdorp</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     :root {
@@ -12,15 +12,12 @@
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      font-family: 'Segoe UI', sans-serif;
-      background: #f0f4f8;
-      color: var(--text);
-      padding: 15px;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #f0f4f8; color: var(--text); padding: 15px;
     }
     .container { max-width: 1300px; margin: 0 auto; }
     header {
-      background: var(--header);
-      color: white; padding: 1.5rem;
+      background: var(--header); color: white; padding: 1.5rem;
       border-radius: 16px; margin-bottom: 20px; text-align: center;
     }
     .summary-grid {
@@ -34,13 +31,12 @@
     }
     .summary-value { font-size: 2.2rem; font-weight: 800; color: var(--header); }
     
-    /* Table Styling */
     .dashboard-section {
       background: white; border-radius: 16px; padding: 22px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.07);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.07); margin-bottom: 25px;
     }
-    .table-container { width: 100%; overflow-x: auto; margin-top: 15px; }
-    table { width: 100%; border-collapse: collapse; min-width: 1000px; }
+    .table-container { width: 100%; overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; min-width: 1000px; margin-top: 15px; }
     th { background: var(--header); color: white; padding: 14px; text-align: left; }
     td { padding: 14px; border-bottom: 1px solid #e2e8f0; }
     
@@ -51,30 +47,30 @@
     .urgency-medium { background: #fff8e6; color: var(--medium); border: 1px solid var(--medium); }
     .urgency-low { background: #f6fff6; color: var(--low); border: 1px solid var(--low); }
     
-    .daily-usage { color: #c53030; font-weight: 700; background: #fff5f5; padding: 2px 6px; border-radius: 4px; }
-    .btn { background: var(--header); color: white; border: none; padding: 10px 20px; border-radius: 50px; cursor: pointer; }
-    .chart-container { height: 180px; width: 100%; }
+    .usage-text { color: #c53030; font-weight: 700; background: #fff5f5; padding: 2px 6px; border-radius: 4px; }
+    .btn { background: var(--header); color: white; border: none; padding: 10px 20px; border-radius: 50px; cursor: pointer; font-weight: bold; }
+    .chart-box { height: 180px; width: 100%; margin-top: 10px; }
   </style>
 </head>
 <body>
   <div class="container">
     <header>
       <h1>🍛 KOTAai INGREDIENT INTELLIGENCE</h1>
-      <p>Kota King Klerksdorp • Advanced AI Demand Forecasting</p>
+      <p>Real-Time Stock & Daily Meal Sales Forecasting</p>
     </header>
 
     <div class="summary-grid">
       <div class="summary-card">
-        <p style="color: #666;">Total Items Tracked</p>
+        <p style="color: #666; font-weight: 600;">📦 Items Tracked</p>
         <div class="summary-value" id="total-items">-</div>
       </div>
       <div class="summary-card">
-        <p style="color: #666;">Critical Alerts</p>
+        <p style="color: #666; font-weight: 600;">🚨 Critical Stock</p>
         <div class="summary-value" id="critical-items" style="color: var(--high);">-</div>
       </div>
       <div class="summary-card">
-        <h3 style="margin-bottom: 10px; font-size: 1rem;">📊 Predicted Meal Sales (Today)</h3>
-        <div class="chart-container">
+        <h3 style="font-size: 1rem; color: #4a5568;">📊 Today's Sales Forecast (Units)</h3>
+        <div class="chart-box">
           <canvas id="mealChart"></canvas>
         </div>
       </div>
@@ -82,8 +78,8 @@
 
     <div class="dashboard-section">
       <div style="display: flex; justify-content: space-between; align-items: center;">
-        <h2>📋 Live Inventory & Reordering Intelligence</h2>
-        <button class="btn" id="refresh-btn">🔄 Sync Live Data</button>
+        <h2>📋 Live Ingredient Inventory & Usage</h2>
+        <button class="btn" onclick="fetchData()">🔄 Refresh Data</button>
       </div>
       <div class="table-container">
         <table>
@@ -100,7 +96,8 @@
               <th>Action</th>
             </tr>
           </thead>
-          <tbody id="table-body"></tbody>
+          <tbody id="table-body">
+            </tbody>
         </table>
       </div>
     </div>
@@ -108,47 +105,49 @@
 
   <script>
     let mealChart = null;
-    const ingredients = ["Atchaar", "Bacon", "Burger patty", "Brown bread", "Cheese", "Chips", "Egg", "Polony", "White bread"];
+    const ingredientList = ["Atchaar", "Bacon", "Burger patty", "Brown bread", "Cheese", "Chips", "Egg", "Polony", "Vienna", "White bread"];
 
-    async function updateDashboard() {
+    async function fetchData() {
       try {
-        const res = await fetch('/api/dashboard', {
+        const response = await fetch('/api/dashboard', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ items: ingredients.map(n => ({ item_name: n })) })
+          body: JSON.stringify({ items: ingredientList.map(name => ({ item_name: name })) })
         });
-        const data = await res.json();
+        const data = await response.json();
 
-        // Update Summary
+        // 1. Update Summaries
         document.getElementById('total-items').textContent = data.summary.total_items;
         document.getElementById('critical-items').textContent = data.summary.critical_items;
 
-        // Update Table
+        // 2. Update Table
         const tbody = document.getElementById('table-body');
-        tbody.innerHTML = '';
-        data.items.forEach(item => {
-          tbody.innerHTML += `
-            <tr style="${item.urgency === 'HIGH' ? 'background: #fffafa;' : ''}">
-              <td><strong>${item.item_name}</strong></td>
-              <td>${item.current_stock}</td>
-              <td><span class="daily-usage">${item.daily_usage}</span></td>
-              <td>${item.weekly_demand}</td>
-              <td>${item.days_left}</td>
-              <td><strong>${item.recommended_order}</strong></td>
-              <td><span class="urgency-badge urgency-${item.urgency.toLowerCase()}">${item.urgency}</span></td>
-              <td><strong>${item.status}</strong></td>
-              <td><small>${item.action}</small></td>
-            </tr>`;
-        });
+        tbody.innerHTML = data.items.map(item => `
+          <tr style="${item.urgency === 'HIGH' ? 'background-color: #fffafa;' : ''}">
+            <td><strong>${item.item_name}</strong></td>
+            <td>${item.current_stock}</td>
+            <td><span class="usage-text">${item.daily_usage}</span></td>
+            <td>${item.weekly_demand}</td>
+            <td>${item.days_left}</td>
+            <td><strong>${item.recommended_order}</strong></td>
+            <td><span class="urgency-badge urgency-${item.urgency.toLowerCase()}">${item.urgency}</span></td>
+            <td><strong>${item.status}</strong></td>
+            <td><small>${item.action}</small></td>
+          </tr>
+        `).join('');
 
-        // Update Graph
-        renderChart(data.meal_forecast);
-      } catch (err) { console.error('Dashboard Error:', err); }
+        // 3. Update Chart
+        updateChart(data.meal_forecast);
+
+      } catch (err) {
+        console.error("Fetch Error:", err);
+      }
     }
 
-    function renderChart(forecast) {
+    function updateChart(forecast) {
       const ctx = document.getElementById('mealChart').getContext('2d');
       if (mealChart) mealChart.destroy();
+      
       mealChart = new Chart(ctx, {
         type: 'bar',
         data: {
@@ -156,21 +155,24 @@
           datasets: [{
             data: Object.values(forecast),
             backgroundColor: '#3182ce',
-            borderRadius: 5,
-            barThickness: 30
+            borderRadius: 6,
+            barThickness: 25
           }]
         },
         options: {
           responsive: true,
           maintainAspectRatio: false,
           plugins: { legend: { display: false } },
-          scales: { y: { beginAtZero: true } }
+          scales: {
+            y: { beginAtZero: true, grid: { display: false } },
+            x: { grid: { display: false } }
+          }
         }
       });
     }
 
-    document.getElementById('refresh-btn').addEventListener('click', updateDashboard);
-    updateDashboard(); // Initial load
+    // Initial Load
+    fetchData();
   </script>
 </body>
   </html>
