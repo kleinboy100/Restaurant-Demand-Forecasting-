@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>KOTAai Ingredient Intelligence | Kota King Klerksdorp</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     :root {
       --high: #ff6b6b;
@@ -48,7 +49,7 @@
     }
     .summary-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      grid-template-columns: 1fr 1fr 2fr; /* Adjusted to give graph more space */
       gap: 18px;
       margin-bottom: 25px;
     }
@@ -57,11 +58,11 @@
       border-radius: 16px;
       padding: 20px;
       box-shadow: 0 4px 12px rgba(0,0,0,0.07);
-      border-top: 4px solid var(--low);
       transition: transform 0.2s;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
     }
-    .summary-card.critical { border-top-color: var(--high); }
-    .summary-card.warning { border-top-color: var(--medium); }
     .summary-card h3 {
       font-size: 1.05rem;
       color: var(--secondary);
@@ -71,13 +72,15 @@
       gap: 6px;
     }
     .summary-value {
-      font-size: 2.0rem;
+      font-size: 2.2rem;
       font-weight: 800;
       color: var(--header);
     }
-    .summary-card.critical .summary-value { color: var(--high); }
-    .summary-card.warning .summary-value { color: var(--medium); }
-
+    .graph-card {
+      grid-column: span 1;
+      height: 200px;
+    }
+    /* Restoring Table Styles */
     .dashboard-section {
       background: var(--card);
       border-radius: 16px;
@@ -92,62 +95,16 @@
       margin-bottom: 18px;
       padding-bottom: 12px;
       border-bottom: 1px solid var(--border);
-      flex-wrap: wrap;
-      gap: 15px;
     }
-    .section-header h2 {
-      font-size: 1.55rem;
-      color: var(--header);
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-    .filter-controls {
-      display: flex;
-      gap: 12px;
-      flex-wrap: wrap;
-      align-items: center;
-      background: #f8fafc;
-      padding: 12px;
-      border-radius: 10px;
-      border: 1px solid var(--border);
-      margin-top: 10px;
-    }
-    .filter-controls input, .filter-controls select {
-      padding: 9px 14px;
-      border: 1px solid #cbd5e0;
-      border-radius: 8px;
-      font-size: 0.95rem;
-      background: white;
-    }
-    .btn {
-      background: linear-gradient(to right, var(--header), #2c5282);
-      color: white;
-      border: none;
-      padding: 9px 18px;
-      border-radius: 50px;
-      font-weight: 600;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      transition: all 0.2s;
-      font-size: 0.95rem;
-    }
-    .btn:hover { transform: translateY(-1px); opacity: 0.95; }
-    .btn.refresh { background: linear-gradient(to right, #2b6cb0, var(--brand)); }
-
     .table-container {
       width: 100%;
       overflow-x: auto;
       border-radius: 12px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-      margin-top: 10px;
     }
     table {
       width: 100%;
       border-collapse: collapse;
-      min-width: 900px;
+      min-width: 950px;
     }
     th {
       background: var(--header);
@@ -155,69 +112,42 @@
       text-align: left;
       padding: 14px 16px;
       font-weight: 600;
-      position: sticky;
-      top: 0;
-      white-space: nowrap;
     }
     td {
       padding: 14px 16px;
       border-bottom: 1px solid var(--border);
-      font-weight: 500;
     }
-    tr:hover td { background-color: #f9fbfd; }
-    tr.critical-row { background-color: var(--critical-bg) !important; border-left: 3px solid var(--high); }
-    tr.warning-row { background-color: var(--warning-bg) !important; border-left: 3px solid var(--medium); }
-    tr.ok-row { background-color: var(--ok-bg) !important; border-left: 3px solid var(--low); }
-
     .urgency-badge {
       display: inline-block;
       padding: 3px 10px;
       border-radius: 20px;
       font-weight: 600;
       font-size: 0.85rem;
-      min-width: 75px;
       text-align: center;
     }
     .urgency-high { background: rgba(255,107,107,0.12); color: var(--high); border: 1px solid var(--high); }
     .urgency-medium { background: rgba(255,165,2,0.12); color: var(--medium); border: 1px solid var(--medium); }
     .urgency-low { background: rgba(76,175,80,0.12); color: var(--low); border: 1px solid var(--low); }
-
     .daily-usage {
       font-weight: 700;
       color: #c53030;
       background: #fff5f5;
       padding: 3px 8px;
       border-radius: 6px;
-      display: inline-block;
     }
-
-    .loading {
-      text-align: center;
-      padding: 30px;
-      color: var(--secondary);
-      font-size: 1.1rem;
+    .btn {
+      background: linear-gradient(to right, var(--header), #2c5282);
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 50px;
+      font-weight: 600;
+      cursor: pointer;
     }
-    .spinner {
-      border: 3px solid rgba(26,54,93,0.1);
-      border-top: 3px solid var(--header);
-      border-radius: 50%;
-      width: 30px;
-      height: 30px;
-      animation: spin 1s linear infinite;
-      margin: 0 auto 15px;
+    #chart-wrapper {
+      width: 100%;
+      height: 180px;
     }
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    .footer {
-      text-align: center;
-      padding: 22px 15px;
-      color: var(--secondary);
-      font-size: 0.92rem;
-      margin-top: 15px;
-      border-top: 1px solid var(--border);
-      line-height: 1.5;
-    }
-    .footer p { margin: 4px 0; }
   </style>
 </head>
 <body>
@@ -225,7 +155,7 @@
     <header>
       <h1>🍛 KOTAai INGREDIENT INTELLIGENCE</h1>
       <p style="color: rgba(255,255,255,0.85); font-size: 1.05rem;">
-        Real-Time Stock Monitoring • Nosty'$ Fresh Fast Food Jouberton 
+        Real-Time Sales Forecasting & Stock Monitoring • Kota King Klerksdorp
       </p>
     </header>
 
@@ -234,283 +164,136 @@
         <h3>📦 Ingredients Tracked</h3>
         <div class="summary-value" id="total-items">-</div>
       </div>
-      <div class="summary-card critical">
-        <h3>🚨 Critical Stock</h3>
-        <div class="summary-value" id="critical-items">-</div>
-      </div>
-      <div class="summary-card warning">
-        <h3>🛒 Recommended Order</h3>
-        <div class="summary-value" id="total-recommended">-</div>
+      <div class="summary-card">
+        <h3>🚨 Critical Items</h3>
+        <div class="summary-value" id="critical-items" style="color: var(--high);">-</div>
       </div>
       <div class="summary-card">
-        <h3>⏱️ Last Updated</h3>
-        <div class="summary-value" id="last-update" style="font-size:1.6rem;">-</div>
-      </div>
-    </div>
-
-    <!-- HISTORICAL USAGE SECTION -->
-    <div class="dashboard-section">
-      <div class="section-header">
-        <h2>📅 Historical Ingredient Usage</h2>
-      </div>
-      <div class="filter-controls">
-        <input type="date" id="history-date" />
-        <select id="history-ingredient">
-          <option value="">Select Ingredient</option>
-        </select>
-        <button class="btn refresh" id="check-history-btn">🔍 Check Usage</button>
-        <button class="debug-toggle" id="debug-toggle">Show Debug Info</button>
-      </div>
-      <div id="history-result" class="loading" style="padding:15px; margin-top:10px; display:none;">
-        <div class="spinner"></div>
-        <div>Calculating historical usage...</div>
-      </div>
-      <div id="debug-box" class="debug-box"></div>
-    </div>
-
-    <!-- MAIN INGREDIENT DASHBOARD -->
-    <div class="dashboard-section">
-      <div class="section-header">
-        <h2>📋 Live Ingredient Inventory</h2>
-        <button class="btn refresh" id="refresh-btn">🔄 Refresh Data</button>
-      </div>
-      <div id="loading" class="loading">
-        <div class="spinner"></div>
-        <div>Loading ingredient intelligence...</div>
-      </div>
-      <div id="recommendations-container" style="display:none;">
-        <div class="table-container">
-          <table>
-            <thead>
-              <tr>
-                <th>Ingredient</th>
-                <th>Current Stock</th>
-                <th>Used Today (SAST)</th>
-                <th>Est. Weekly Demand</th>
-                <th>Days Left</th>
-                <th>Reorder Qty</th>
-                <th>Urgency</th>
-                <th>Status</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody id="table-body"></tbody>
-          </table>
+        <h3>📊 Today's Meal Forecast (Units)</h3>
+        <div id="chart-wrapper">
+          <canvas id="mealChart"></canvas>
         </div>
       </div>
     </div>
 
-    <!-- FOOTER -->
-    <div class="footer">
-      <p>
-        <strong>KOTAai Ingredient Intelligence System</strong> • Proprietary Forecasting Technology •
-        © 2026 Nosty'$ Fresh Fast Food Jouberton 
-      </p>
-      <p>
-        System Version: 4.1 • Data Source: KOTAai API • Forecast Method: Meal-to-Ingredient Conversion • SAST Timezone
-      </p>
-      <p style="margin-top:6px; font-size:0.85rem; color:#718096;">
-        All ingredient usage calculations reset precisely at 00:00 SAST daily. Historical data derived from
-        <strong>orders</strong> + <strong>order_items</strong> + <strong>meal_recipes</strong>.
-      </p>
+    <div class="dashboard-section">
+      <div class="section-header">
+        <h2>📋 Live Ingredient Inventory & Reordering</h2>
+        <button class="btn" id="refresh-btn">🔄 Refresh Data</button>
+      </div>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Ingredient</th>
+              <th>Current Stock</th>
+              <th>Used Today (SAST)</th>
+              <th>Est. Weekly Demand</th>
+              <th>Days Left</th>
+              <th>Reorder Qty</th>
+              <th>Urgency</th>
+              <th>Status</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="table-body">
+            </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="footer" style="text-align: center; color: var(--secondary); margin-top: 20px; font-size: 0.9rem;">
+      <p>© 2026 Kota King Klerksdorp • Powered by KOTAai Prophet v4.2</p>
     </div>
   </div>
 
   <script>
-  const CONFIG = {
-    // ✅ Always use the same domain that serves this HTML (Render)
-    API_BASE: '',
-    INGREDIENTS: [
-      "Atchaar",
-      "Bacon",
-      "Burger patty",
-      "Brown bread",
-      "Cheese",
-      "Chicken Russian",
-      "Chicken stripes",
-      "Chips",
-      "Curry fish",
-      "Egg",
-      "Fat cakes (Magwinya)",
-      "Frankfutter",
-      "Ham",
-      "Lettuce",
-      "Liver",
-      "Mince",
-      "Nosty Sauce",
-      "Onions",
-      "Polony",
-      "Russians (Standard and Cheesy)",
-      "Special Garlic",
-      "Steak",
-      "Tomato",
-      "Vienna",
-      "White bread"
-    ]
-  };
+    const CONFIG = {
+      API_BASE: '',
+      INGREDIENTS: ["Atchaar", "Bacon", "Burger patty", "Brown bread", "Cheese", "Chips", "Egg", "Polony", "Steak", "Tomato", "Vienna", "White bread"]
+    };
 
-  const els = {
-    loading: document.getElementById('loading'),
-    container: document.getElementById('recommendations-container'),
-    tableBody: document.getElementById('table-body'),
-    refreshBtn: document.getElementById('refresh-btn'),
-    totalItems: document.getElementById('total-items'),
-    criticalItems: document.getElementById('critical-items'),
-    totalRecommended: document.getElementById('total-recommended'),
-    lastUpdate: document.getElementById('last-update'),
-    historyDate: document.getElementById('history-date'),
-    historyIngredient: document.getElementById('history-ingredient'),
-    checkBtn: document.getElementById('check-history-btn'),
-    resultBox: document.getElementById('history-result'),
-    debugBox: document.getElementById('debug-box'),
-    debugToggle: document.getElementById('debug-toggle')
-  };
+    let mealChart = null;
 
-  // Populate historical ingredient dropdown
-  CONFIG.INGREDIENTS.forEach(ing => {
-    const opt = document.createElement('option');
-    opt.value = ing;
-    opt.textContent = ing;
-    els.historyIngredient.appendChild(opt);
-  });
+    async function fetchDashboard() {
+      try {
+        const response = await fetch(`${CONFIG.API_BASE}/api/dashboard`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items: CONFIG.INGREDIENTS.map(name => ({ item_name: name })) })
+        });
 
-  // Default date to today
-  els.historyDate.value = new Date().toISOString().split('T')[0];
+        const data = await response.json();
 
-  // Toggle debug info
-  els.debugToggle.addEventListener('click', () => {
-    els.debugBox.style.display = els.debugBox.style.display === 'block' ? 'none' : 'block';
-    els.debugToggle.textContent =
-      els.debugBox.style.display === 'block' ? 'Hide Debug Info' : 'Show Debug Info';
-  });
+        // 1. Update Summary Cards
+        document.getElementById('total-items').textContent = data.summary.total_items;
+        document.getElementById('critical-items').textContent = data.summary.critical_items;
 
-  // -----------------------------------------------------------------------------
-  // FETCH DASHBOARD DATA
-  // -----------------------------------------------------------------------------
-  async function fetchDashboard() {
-    els.loading.style.display = 'block';
-    els.container.style.display = 'none';
-    els.loading.innerHTML = `
-      <div class="spinner"></div>
-      <div>Loading ingredient intelligence...</div>
-    `;
+        // 2. Update Table (Restoring all data points)
+        const tbody = document.getElementById('table-body');
+        tbody.innerHTML = '';
+        data.items.forEach(item => {
+          const row = document.createElement('tr');
+          row.style.background = item.urgency === 'HIGH' ? 'var(--critical-bg)' : 'white';
+          row.innerHTML = `
+            <td><strong>${item.item_name}</strong></td>
+            <td>${item.current_stock}</td>
+            <td><span class="daily-usage">${item.daily_usage}</span></td>
+            <td>${item.weekly_demand}</td>
+            <td>${item.days_left}</td>
+            <td><strong>${item.recommended_order}</strong></td>
+            <td><span class="urgency-badge urgency-${item.urgency.toLowerCase()}">${item.urgency}</span></td>
+            <td><strong>${item.status}</strong></td>
+            <td>${item.action}</td>
+          `;
+          tbody.appendChild(row);
+        });
 
-    try {
-      const response = await fetch(`${CONFIG.API_BASE}/api/dashboard`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items: CONFIG.INGREDIENTS.map(name => ({ item_name: name })) })
-      });
+        // 3. Update Bar Graph
+        renderChart(data.meal_forecast);
 
-      if (!response.ok) throw new Error(`Server returned ${response.status}`);
-      const data = await response.json();
-
-      els.totalItems.textContent = data.summary.total_items;
-      els.criticalItems.textContent = data.summary.critical_items;
-      els.totalRecommended.textContent = data.summary.total_recommended;
-      els.lastUpdate.textContent = data.summary.timestamp.split(' ')[1] || data.summary.timestamp;
-
-      els.tableBody.innerHTML = '';
-      data.items.forEach(item => {
-        const row = document.createElement('tr');
-        row.className = `${item.status.toLowerCase()}-row`;
-        row.innerHTML = `
-          <td><strong>${item.item_name}</strong></td>
-          <td>${item.current_stock}</td>
-          <td><span class="daily-usage">${item.daily_usage}</span></td>
-          <td>${item.weekly_demand}</td>
-          <td>${item.days_left}</td>
-          <td><strong>${item.recommended_order}</strong></td>
-          <td><span class="urgency-badge urgency-${item.urgency.toLowerCase()}">${item.urgency}</span></td>
-          <td><strong>${item.status}</strong></td>
-          <td>${item.action}</td>
-        `;
-        els.tableBody.appendChild(row);
-      });
-
-      els.container.style.display = 'block';
-      els.loading.style.display = 'none';
-    } catch (err) {
-      console.error('❌ Dashboard fetch failed:', err);
-      els.loading.innerHTML = `
-        <div style="color:#e53e3e; font-weight:600; margin-bottom:8px;">
-          ⚠️ Failed to load dashboard
-        </div>
-        <div style="color:#718096; margin-bottom:12px; font-size:0.95rem;">
-          ${err.message || err}
-        </div>
-        <button class="btn refresh" onclick="fetchDashboard()" style="margin-top:5px;">
-          🔄 Retry
-        </button>
-      `;
-      els.container.style.display = 'none';
-    }
-  }
-
-  // -----------------------------------------------------------------------------
-  // FETCH HISTORICAL USAGE
-  // -----------------------------------------------------------------------------
-  async function fetchHistory() {
-    const date = els.historyDate.value;
-    const ing = els.historyIngredient.value;
-    if (!ing) {
-      alert('Please select an ingredient first.');
-      return;
+      } catch (err) {
+        console.error('❌ Error:', err);
+      }
     }
 
-    els.resultBox.style.display = 'block';
-    els.resultBox.innerHTML = `
-      <div class="spinner"></div>
-      <div>Checking "${ing}" usage for ${date}…</div>
-    `;
-    els.debugBox.style.display = 'none';
+    function renderChart(mealData) {
+      const ctx = document.getElementById('mealChart').getContext('2d');
+      
+      if (mealChart) {
+        mealChart.destroy();
+      }
 
-    try {
-      const response = await fetch(`${CONFIG.API_BASE}/api/usage-history`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target_date: date, ingredient_name: ing })
+      mealChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: Object.keys(mealData),
+          datasets: [{
+            label: 'Predicted Sales',
+            data: Object.values(mealData),
+            backgroundColor: '#3182ce',
+            borderRadius: 5,
+            barThickness: 25
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false }
+          },
+          scales: {
+            y: { beginAtZero: true, ticks: { font: { size: 10 } } },
+            x: { ticks: { font: { size: 10 } } }
+          }
+        }
       });
-
-      if (!response.ok) throw new Error(`Server returned ${response.status}`);
-      const data = await response.json();
-
-      els.resultBox.innerHTML = `
-        <div style="padding:12px; background:${data.amount_used > 0 ? '#f0fff4' : '#fff0f0'}; 
-                    border-radius:8px; border-left:4px solid ${data.amount_used > 0 ? '#38a169' : '#e53e3e'};">
-          <strong>${ing}</strong> used on <strong>${date}</strong>:&nbsp;
-          <span style="font-size:1.4rem; font-weight:700; color:${data.amount_used > 0 ? '#2f855a' : '#c53030'}">
-            ${data.amount_used} ${data.unit}
-          </span>
-        </div>
-      `;
-
-      els.debugBox.innerHTML = `
-        <strong>🔍 Calculation Details:</strong><br>
-        • Date queried (SAST): ${date}<br>
-        • Ingredient: ${ing}<br>
-        • Raw value: ${data.amount_used} ${data.unit}<br>
-        • Source: Sum of all meals containing this ingredient on that day<br>
-        • Daily reset: 00:00 SAST
-      `;
-    } catch (err) {
-      console.error('❌ History fetch failed:', err);
-      els.resultBox.innerHTML = `
-        <span style="color:#e53e3e; font-weight:600;">❌ Error: ${err.message}</span>
-        <button class="btn refresh" onclick="fetchHistory()" style="margin-left:10px;">Retry</button>
-      `;
-      els.debugBox.innerHTML = `<span style="color:#dd6b20">Debug: ${err.toString()}</span>`;
     }
-  }
 
-  els.refreshBtn.addEventListener('click', fetchDashboard);
-  els.checkBtn.addEventListener('click', fetchHistory);
-
-  // Initial load
-  fetchDashboard();
-
-  // Auto-refresh every 5 minutes
-  setInterval(fetchDashboard, 300000);
+    document.getElementById('refresh-btn').addEventListener('click', fetchDashboard);
+    
+    // Initial Load
+    fetchDashboard();
   </script>
 </body>
-          </html>
+</html>
