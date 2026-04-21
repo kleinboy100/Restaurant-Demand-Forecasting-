@@ -3,183 +3,87 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>KOTAai Ingredient Intelligence | Kota King Klerksdorp</title>
+  <title>KOTAai Dashboard | Kota King</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     :root {
-      --high: #ff6b6b;
-      --medium: #ffa502;
-      --low: #4caf50;
-      --critical-bg: #fff5f5;
-      --warning-bg: #fff8e6;
-      --ok-bg: #f6fff6;
-      --border: #e2e8f0;
-      --header: #1a365d;
-      --card: #ffffff;
-      --text: #1a202c;
-      --secondary: #4a5568;
-      --brand: #3182ce;
+      --high: #ff6b6b; --medium: #ffa502; --low: #4caf50;
+      --header: #1a365d; --card: #ffffff; --text: #1a202c;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      font-family: 'Segoe UI', system-ui, sans-serif;
-      background: linear-gradient(135deg, #f0f4f8 0%, #e6f7ff 100%);
+      font-family: 'Segoe UI', sans-serif;
+      background: #f0f4f8;
       color: var(--text);
-      line-height: 1.5;
       padding: 15px;
-      min-height: 100vh;
     }
     .container { max-width: 1300px; margin: 0 auto; }
     header {
       background: var(--header);
-      color: white;
-      padding: 1.4rem;
-      border-radius: 16px;
-      margin-bottom: 20px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.12);
-      text-align: center;
-    }
-    header h1 {
-      font-size: 2.1rem;
-      background: linear-gradient(to right, #ffd700, #ffaa00);
-      -webkit-background-clip: text;
-      background-clip: text;
-      color: transparent;
-      margin-bottom: 8px;
+      color: white; padding: 1.5rem;
+      border-radius: 16px; margin-bottom: 20px; text-align: center;
     }
     .summary-grid {
       display: grid;
-      grid-template-columns: 1fr 1fr 2fr; /* Adjusted to give graph more space */
-      gap: 18px;
-      margin-bottom: 25px;
+      grid-template-columns: 1fr 1fr 2fr;
+      gap: 18px; margin-bottom: 25px;
     }
     .summary-card {
-      background: var(--card);
-      border-radius: 16px;
-      padding: 20px;
+      background: white; border-radius: 16px; padding: 20px;
       box-shadow: 0 4px 12px rgba(0,0,0,0.07);
-      transition: transform 0.2s;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
     }
-    .summary-card h3 {
-      font-size: 1.05rem;
-      color: var(--secondary);
-      margin-bottom: 10px;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-    .summary-value {
-      font-size: 2.2rem;
-      font-weight: 800;
-      color: var(--header);
-    }
-    .graph-card {
-      grid-column: span 1;
-      height: 200px;
-    }
-    /* Restoring Table Styles */
+    .summary-value { font-size: 2.2rem; font-weight: 800; color: var(--header); }
+    
+    /* Table Styling */
     .dashboard-section {
-      background: var(--card);
-      border-radius: 16px;
+      background: white; border-radius: 16px; padding: 22px;
       box-shadow: 0 4px 12px rgba(0,0,0,0.07);
-      padding: 22px;
-      margin-bottom: 25px;
     }
-    .section-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 18px;
-      padding-bottom: 12px;
-      border-bottom: 1px solid var(--border);
-    }
-    .table-container {
-      width: 100%;
-      overflow-x: auto;
-      border-radius: 12px;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      min-width: 950px;
-    }
-    th {
-      background: var(--header);
-      color: white;
-      text-align: left;
-      padding: 14px 16px;
-      font-weight: 600;
-    }
-    td {
-      padding: 14px 16px;
-      border-bottom: 1px solid var(--border);
-    }
+    .table-container { width: 100%; overflow-x: auto; margin-top: 15px; }
+    table { width: 100%; border-collapse: collapse; min-width: 1000px; }
+    th { background: var(--header); color: white; padding: 14px; text-align: left; }
+    td { padding: 14px; border-bottom: 1px solid #e2e8f0; }
+    
     .urgency-badge {
-      display: inline-block;
-      padding: 3px 10px;
-      border-radius: 20px;
-      font-weight: 600;
-      font-size: 0.85rem;
-      text-align: center;
+      padding: 4px 12px; border-radius: 20px; font-weight: 600; font-size: 0.8rem;
     }
-    .urgency-high { background: rgba(255,107,107,0.12); color: var(--high); border: 1px solid var(--high); }
-    .urgency-medium { background: rgba(255,165,2,0.12); color: var(--medium); border: 1px solid var(--medium); }
-    .urgency-low { background: rgba(76,175,80,0.12); color: var(--low); border: 1px solid var(--low); }
-    .daily-usage {
-      font-weight: 700;
-      color: #c53030;
-      background: #fff5f5;
-      padding: 3px 8px;
-      border-radius: 6px;
-    }
-    .btn {
-      background: linear-gradient(to right, var(--header), #2c5282);
-      color: white;
-      border: none;
-      padding: 10px 20px;
-      border-radius: 50px;
-      font-weight: 600;
-      cursor: pointer;
-    }
-    #chart-wrapper {
-      width: 100%;
-      height: 180px;
-    }
+    .urgency-high { background: #fff5f5; color: var(--high); border: 1px solid var(--high); }
+    .urgency-medium { background: #fff8e6; color: var(--medium); border: 1px solid var(--medium); }
+    .urgency-low { background: #f6fff6; color: var(--low); border: 1px solid var(--low); }
+    
+    .daily-usage { color: #c53030; font-weight: 700; background: #fff5f5; padding: 2px 6px; border-radius: 4px; }
+    .btn { background: var(--header); color: white; border: none; padding: 10px 20px; border-radius: 50px; cursor: pointer; }
+    .chart-container { height: 180px; width: 100%; }
   </style>
 </head>
 <body>
   <div class="container">
     <header>
       <h1>🍛 KOTAai INGREDIENT INTELLIGENCE</h1>
-      <p style="color: rgba(255,255,255,0.85); font-size: 1.05rem;">
-        Real-Time Sales Forecasting & Stock Monitoring • Kota King Klerksdorp
-      </p>
+      <p>Kota King Klerksdorp • Advanced AI Demand Forecasting</p>
     </header>
 
     <div class="summary-grid">
       <div class="summary-card">
-        <h3>📦 Ingredients Tracked</h3>
+        <p style="color: #666;">Total Items Tracked</p>
         <div class="summary-value" id="total-items">-</div>
       </div>
       <div class="summary-card">
-        <h3>🚨 Critical Items</h3>
+        <p style="color: #666;">Critical Alerts</p>
         <div class="summary-value" id="critical-items" style="color: var(--high);">-</div>
       </div>
       <div class="summary-card">
-        <h3>📊 Today's Meal Forecast (Units)</h3>
-        <div id="chart-wrapper">
+        <h3 style="margin-bottom: 10px; font-size: 1rem;">📊 Predicted Meal Sales (Today)</h3>
+        <div class="chart-container">
           <canvas id="mealChart"></canvas>
         </div>
       </div>
     </div>
 
     <div class="dashboard-section">
-      <div class="section-header">
-        <h2>📋 Live Ingredient Inventory & Reordering</h2>
-        <button class="btn" id="refresh-btn">🔄 Refresh Data</button>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h2>📋 Live Inventory & Reordering Intelligence</h2>
+        <button class="btn" id="refresh-btn">🔄 Sync Live Data</button>
       </div>
       <div class="table-container">
         <table>
@@ -187,8 +91,8 @@
             <tr>
               <th>Ingredient</th>
               <th>Current Stock</th>
-              <th>Used Today (SAST)</th>
-              <th>Est. Weekly Demand</th>
+              <th>Used Today</th>
+              <th>Weekly Demand</th>
               <th>Days Left</th>
               <th>Reorder Qty</th>
               <th>Urgency</th>
@@ -196,104 +100,77 @@
               <th>Action</th>
             </tr>
           </thead>
-          <tbody id="table-body">
-            </tbody>
+          <tbody id="table-body"></tbody>
         </table>
       </div>
-    </div>
-
-    <div class="footer" style="text-align: center; color: var(--secondary); margin-top: 20px; font-size: 0.9rem;">
-      <p>© 2026 Kota King Klerksdorp • Powered by KOTAai Prophet v4.2</p>
     </div>
   </div>
 
   <script>
-    const CONFIG = {
-      API_BASE: '',
-      INGREDIENTS: ["Atchaar", "Bacon", "Burger patty", "Brown bread", "Cheese", "Chips", "Egg", "Polony", "Steak", "Tomato", "Vienna", "White bread"]
-    };
-
     let mealChart = null;
+    const ingredients = ["Atchaar", "Bacon", "Burger patty", "Brown bread", "Cheese", "Chips", "Egg", "Polony", "White bread"];
 
-    async function fetchDashboard() {
+    async function updateDashboard() {
       try {
-        const response = await fetch(`${CONFIG.API_BASE}/api/dashboard`, {
+        const res = await fetch('/api/dashboard', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ items: CONFIG.INGREDIENTS.map(name => ({ item_name: name })) })
+          body: JSON.stringify({ items: ingredients.map(n => ({ item_name: n })) })
         });
+        const data = await res.json();
 
-        const data = await response.json();
-
-        // 1. Update Summary Cards
+        // Update Summary
         document.getElementById('total-items').textContent = data.summary.total_items;
         document.getElementById('critical-items').textContent = data.summary.critical_items;
 
-        // 2. Update Table (Restoring all data points)
+        // Update Table
         const tbody = document.getElementById('table-body');
         tbody.innerHTML = '';
         data.items.forEach(item => {
-          const row = document.createElement('tr');
-          row.style.background = item.urgency === 'HIGH' ? 'var(--critical-bg)' : 'white';
-          row.innerHTML = `
-            <td><strong>${item.item_name}</strong></td>
-            <td>${item.current_stock}</td>
-            <td><span class="daily-usage">${item.daily_usage}</span></td>
-            <td>${item.weekly_demand}</td>
-            <td>${item.days_left}</td>
-            <td><strong>${item.recommended_order}</strong></td>
-            <td><span class="urgency-badge urgency-${item.urgency.toLowerCase()}">${item.urgency}</span></td>
-            <td><strong>${item.status}</strong></td>
-            <td>${item.action}</td>
-          `;
-          tbody.appendChild(row);
+          tbody.innerHTML += `
+            <tr style="${item.urgency === 'HIGH' ? 'background: #fffafa;' : ''}">
+              <td><strong>${item.item_name}</strong></td>
+              <td>${item.current_stock}</td>
+              <td><span class="daily-usage">${item.daily_usage}</span></td>
+              <td>${item.weekly_demand}</td>
+              <td>${item.days_left}</td>
+              <td><strong>${item.recommended_order}</strong></td>
+              <td><span class="urgency-badge urgency-${item.urgency.toLowerCase()}">${item.urgency}</span></td>
+              <td><strong>${item.status}</strong></td>
+              <td><small>${item.action}</small></td>
+            </tr>`;
         });
 
-        // 3. Update Bar Graph
+        // Update Graph
         renderChart(data.meal_forecast);
-
-      } catch (err) {
-        console.error('❌ Error:', err);
-      }
+      } catch (err) { console.error('Dashboard Error:', err); }
     }
 
-    function renderChart(mealData) {
+    function renderChart(forecast) {
       const ctx = document.getElementById('mealChart').getContext('2d');
-      
-      if (mealChart) {
-        mealChart.destroy();
-      }
-
+      if (mealChart) mealChart.destroy();
       mealChart = new Chart(ctx, {
         type: 'bar',
         data: {
-          labels: Object.keys(mealData),
+          labels: Object.keys(forecast),
           datasets: [{
-            label: 'Predicted Sales',
-            data: Object.values(mealData),
+            data: Object.values(forecast),
             backgroundColor: '#3182ce',
             borderRadius: 5,
-            barThickness: 25
+            barThickness: 30
           }]
         },
         options: {
           responsive: true,
           maintainAspectRatio: false,
-          plugins: {
-            legend: { display: false }
-          },
-          scales: {
-            y: { beginAtZero: true, ticks: { font: { size: 10 } } },
-            x: { ticks: { font: { size: 10 } } }
-          }
+          plugins: { legend: { display: false } },
+          scales: { y: { beginAtZero: true } }
         }
       });
     }
 
-    document.getElementById('refresh-btn').addEventListener('click', fetchDashboard);
-    
-    // Initial Load
-    fetchDashboard();
+    document.getElementById('refresh-btn').addEventListener('click', updateDashboard);
+    updateDashboard(); // Initial load
   </script>
 </body>
-</html>
+  </html>
