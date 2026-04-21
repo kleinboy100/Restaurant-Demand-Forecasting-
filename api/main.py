@@ -1,12 +1,12 @@
 import os
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional, List, Dict
 
 import pandas as pd
 from prophet import Prophet
 from pydantic import BaseModel
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from supabase import create_client, Client
@@ -16,7 +16,7 @@ import requests
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="KOTAai Ingredient Intelligence", version="4.6.0")
+app = FastAPI(title="KOTAai Ingredient Intelligence", version="4.7.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -34,8 +34,6 @@ def init_supabase():
     key = os.getenv("SUPABASE_ANON_KEY")
     if url and key:
         supabase = create_client(url, key)
-    else:
-        logger.warning("Supabase credentials not found in environment variables.")
 
 @app.on_event("startup")
 async def startup():
@@ -52,9 +50,8 @@ def get_weather_impact():
     try:
         r = requests.get("https://api.open-meteo.com/v1/forecast?latitude=-26.85&longitude=26.66&daily=precipitation_probability_max&forecast_days=1&timezone=Africa/Johannesburg", timeout=3)
         prob = r.json()["daily"]["precipitation_probability_max"][0]
-        return 0.7 if prob > 60 else 0.85 if prob > 20 else 1.0
-    except Exception as e:
-        logger.error(f"Weather fetch failed: {e}")
+        return 0.75 if prob > 50 else 1.0
+    except:
         return 1.0
 
 def run_safe_forecast(name: str, days: int = 7):
@@ -71,6 +68,7 @@ def run_safe_forecast(name: str, days: int = 7):
         df_orders = pd.DataFrame(orders.data).rename(columns={"id": "order_id"})
         df = pd.merge(df_items, df_orders, on="order_id")
         
+        # Format for Prophet
         df["ds"] = pd.to_datetime(df["created_at"]).dt.tz_localize(None).dt.date
         daily = df.groupby("ds")["quantity"].sum().reset_index().rename(columns={"ds": "ds", "quantity": "y"})
         
@@ -82,17 +80,19 @@ def run_safe_forecast(name: str, days: int = 7):
         forecast = m.predict(future)
         return forecast.tail(days)
     except Exception as e:
-        logger.error(f"Forecast failed for {name}: {e}")
+        logger.error(f"Forecast Error [{name}]: {e}")
         return None
 
 @app.post("/api/forecast-meals")
 async def forecast_meals():
-    meals = ["Kota King", "Special Kota", "Classic Burger", "Russian & Chips"]
+    # Representative samples from your full menu for the graph
+    top_meals = ["Original Dagwood", "Laprovance", "Tower of Terror", "N12_3 Loaf", "Combo 45", "Ext 10"]
     impact = get_weather_impact()
     results = {}
-    for meal in meals:
+    for meal in top_meals:
         f = run_safe_forecast(meal, 1)
-        val = float(f["yhat"].iloc[0]) if f is not None else 15.0 
+        # Ensure result is a standard Python float for JSON
+        val = float(f["yhat"].iloc[0]) if f is not None else 8.0 
         results[meal] = round(val * impact, 1)
     return results
 
@@ -101,7 +101,7 @@ async def dashboard(req: DashboardRequest):
     out = []
     for entry in req.items:
         f = run_safe_forecast(entry.item_name, 7)
-        weekly = float(f["yhat"].sum()) if f is not None else 70.0
+        weekly = float(f["yhat"].sum()) if f is not None else 50.0
         daily = weekly / 7.0
         stock = float(entry.current_stock or 0)
         days_left = stock / daily if daily > 0 else 99.0
@@ -124,30 +124,12 @@ async def dashboard(req: DashboardRequest):
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_home():
-    # Attempt to serve the physical file
     file_path = os.path.join(os.path.dirname(__file__), "index.html")
     if os.path.exists(file_path):
-        with open(file_path, "r") as f:
-            return f.read()
-    
-    # Fallback HTML in case index.html is missing
-    return """
-    <html>
-        <head><title>KOTAai API Status</title></head>
-        <body style="font-family: sans-serif; text-align: center; padding-top: 50px;">
-            <h1 style="color: #1a365d;">🍛 KOTAai API is Online</h1>
-            <p>The dashboard file (index.html) was not found in the root directory.</p>
-            <div style="margin-top: 20px; padding: 20px; background: #f7fafc; display: inline-block; border-radius: 10px;">
-                <strong>API Endpoints:</strong><br>
-                <code>POST /api/dashboard</code><br>
-                <code>POST /api/forecast-meals</code>
-            </div>
-        </body>
-    </html>
-    """
+        with open(file_path, "r") as f: return f.read()
+    return "<h1>KOTAai Active</h1><p>index.html not found.</p>"
 
 if __name__ == "__main__":
     import uvicorn
-    # Use environment PORT for cloud providers like Render or Railway
     port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
