@@ -12,11 +12,10 @@ from fastapi.responses import HTMLResponse
 from supabase import create_client, Client
 import requests
 
-# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="KOTAai Ingredient Intelligence", version="4.7.0")
+app = FastAPI(title="KOTAai Ingredient Intelligence", version="4.8.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -41,7 +40,7 @@ async def startup():
 
 class DashboardItem(BaseModel):
     item_name: str
-    current_stock: Optional[float] = 0
+    current_stock: Optional[float] = None
 
 class DashboardRequest(BaseModel):
     items: List[DashboardItem]
@@ -64,16 +63,11 @@ def run_safe_forecast(name: str, days: int = 7):
         orders = supabase.table("orders").select("id, created_at").in_("id", order_ids).execute()
         if not orders.data: return None
         
-        df_items = pd.DataFrame(res.data)
-        df_orders = pd.DataFrame(orders.data).rename(columns={"id": "order_id"})
-        df = pd.merge(df_items, df_orders, on="order_id")
-        
-        # Format for Prophet
+        df = pd.merge(pd.DataFrame(res.data), pd.DataFrame(orders.data).rename(columns={"id": "order_id"}), on="order_id")
         df["ds"] = pd.to_datetime(df["created_at"]).dt.tz_localize(None).dt.date
         daily = df.groupby("ds")["quantity"].sum().reset_index().rename(columns={"ds": "ds", "quantity": "y"})
         
         if len(daily) < 2: return None
-
         m = Prophet(yearly_seasonality=False, weekly_seasonality=True, daily_seasonality=False)
         m.fit(daily)
         future = m.make_future_dataframe(periods=days)
@@ -85,38 +79,55 @@ def run_safe_forecast(name: str, days: int = 7):
 
 @app.post("/api/forecast-meals")
 async def forecast_meals():
-    # Representative samples from your full menu for the graph
+    # Key representative items for the chart
     top_meals = ["Original Dagwood", "Laprovance", "Tower of Terror", "N12_3 Loaf", "Combo 45", "Ext 10"]
     impact = get_weather_impact()
     results = {}
     for meal in top_meals:
         f = run_safe_forecast(meal, 1)
-        # Ensure result is a standard Python float for JSON
-        val = float(f["yhat"].iloc[0]) if f is not None else 8.0 
+        val = float(f["yhat"].iloc[0]) if f is not None else 10.0 
         results[meal] = round(val * impact, 1)
     return results
 
 @app.post("/api/dashboard")
 async def dashboard(req: DashboardRequest):
     out = []
+    total_rec = 0.0
     for entry in req.items:
-        f = run_safe_forecast(entry.item_name, 7)
+        name = entry.item_name
+        # 1. Fetch stock directly from database
+        stock = 0.0
+        if supabase:
+            stock_res = supabase.table("ingredient_stock").select("current_stock").ilike("ingredient_name", f"%{name}%").execute()
+            if stock_res.data:
+                stock = float(stock_res.data[0]["current_stock"])
+        
+        # 2. Run forecast for demand
+        f = run_safe_forecast(name, 7)
         weekly = float(f["yhat"].sum()) if f is not None else 50.0
         daily = weekly / 7.0
-        stock = float(entry.current_stock or 0)
         days_left = stock / daily if daily > 0 else 99.0
         
+        # 3. Calculate Recommendation (Buffer logic: 1.5x weekly demand minus current stock)
+        recommend = max(0.0, (weekly * 1.5) - stock)
+        total_rec += recommend
+        
         out.append({
-            "item_name": entry.item_name,
+            "item_name": name,
             "current_stock": round(stock, 1),
+            "weekly_demand": round(weekly, 1),
             "days_left": round(days_left, 1),
-            "urgency": "HIGH" if days_left < 3 else "MEDIUM" if days_left < 7 else "LOW"
+            "recommended_order": round(recommend, 1),
+            "urgency": "HIGH" if days_left < 3 else "MEDIUM" if days_left < 7 else "LOW",
+            "status": "CRITICAL" if days_left < 3 else "OK",
+            "action": "REORDER NOW" if days_left < 3 else "Monitor stock"
         })
     
     return {
         "summary": {
             "total_items": len(out),
             "critical_items": len([x for x in out if x["urgency"] == "HIGH"]),
+            "total_recommended": round(total_rec, 1),
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         },
         "items": out
@@ -127,9 +138,8 @@ async def serve_home():
     file_path = os.path.join(os.path.dirname(__file__), "index.html")
     if os.path.exists(file_path):
         with open(file_path, "r") as f: return f.read()
-    return "<h1>KOTAai Active</h1><p>index.html not found.</p>"
+    return "<h1>KOTAai Active</h1><p>index.html missing.</p>"
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
