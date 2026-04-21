@@ -1,25 +1,29 @@
-# main.py - KOTAai Intelligence with PROPHET Integration
+# ----------------------------------------------------------
+# main.py – KOTAai Ingredient Intelligence API (Enhanced)
+# --------------------------------------------------------------
 import os
 import logging
-import requests
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
-from pathlib import Path
+import pickle
+from datetime import datetime, timedelta, date, timezone
 from typing import Optional, List, Dict
 
+import pandas as pd
+import numpy as np
+from prophet import Prophet
+from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, FileResponse
-from pydantic import BaseModel
+from fastapi.responses import HTMLResponse
 from supabase import create_client, Client
-from prophet import Prophet
+import requests
 
-# --- Setup & Logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="KOTAai Ingredient Intelligence")
+app = FastAPI(
+    title="KOTAai Restaurant Demand Forecasting API",
+    version="4.2.0",
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,145 +33,116 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Supabase Initialization ---
 supabase: Optional[Client] = None
+model_cache: Dict[str, Prophet] = {}
 
-def init_supabase():
+class DashboardItem(BaseModel):
+    item_name: str
+    current_stock: Optional[int] = None
+
+class DashboardRequest(BaseModel):
+    items: List[DashboardItem]
+
+class UsageHistoryRequest(BaseModel):
+    target_date: str
+    ingredient_name: Optional[str] = "All"
+
+FALLBACK_DEMANDS = {
+    "chips": 500.0, "cheese": 50.0, "russian": 12.0, "lettuce": 8.0,
+    "bread": 25.0, "tomato": 10.0, "atchaar": 5.0, "vienna": 15.0
+}
+
+def init_supabase() -> bool:
     global supabase
-    url = os.getenv("SUPABASE_URL")
-    key = os.getenv("SUPABASE_ANON_KEY")
-    if url and key:
-        supabase = create_client(url, key)
-        logger.info("✅ Supabase connection successful.")
+    try:
+        supabase_url = os.getenv("SUPABASE_URL")
+        supabase_key = os.getenv("SUPABASE_ANON_KEY")
+        if not supabase_url or not supabase_key: return False
+        supabase = create_client(supabase_url, supabase_key)
+        return True
+    except Exception: return False
 
 @app.on_event("startup")
 async def startup():
     init_supabase()
 
-# --- Models ---
-class DashboardItem(BaseModel):
-    item_name: str
-    current_stock: Optional[float] = None
-
-class DashboardRequest(BaseModel):
-    items: List[DashboardItem]
-
-# --- PROPHET FORECASTING ENGINE ---
-def get_prophet_forecast(item_name: str) -> float:
-    """
-    Fetches historical sales from Supabase, trains a Prophet model, 
-    and predicts units sold for today.
-    """
-    if not supabase:
-        return 20.0 # Fallback if DB is not connected
-
+def get_klerksdorp_weather(days_ahead: int = 7) -> Dict[str, float]:
     try:
-        # 1. Fetch historical sales for this meal
-        # Assuming table 'order_items' has 'item_name', 'quantity', and 'created_at'
-        res = supabase.table("order_items") \
-            .select("quantity, created_at") \
-            .ilike("item_name", f"%{item_name}%") \
-            .execute()
+        url = "https://api.open-meteo.com/v1/forecast"
+        params = {"latitude": -26.85, "longitude": 26.66, "daily": "precipitation_probability_max", "forecast_days": days_ahead, "timezone": "Africa/Johannesburg"}
+        r = requests.get(url, params=params, timeout=5)
+        data = r.json()
+        return {iso: (0.7 if prob > 60 else 0.85 if prob > 20 else 1.0) for i, (iso, prob) in enumerate(zip(data["daily"]["time"], data["daily"]["precipitation_probability_max"]))}
+    except: return {}
 
-        if not res.data or len(res.data) < 5:
-            return 15.0 # Fallback if insufficient data for training
-
-        # 2. Prepare Dataframe for Prophet
-        df = pd.DataFrame(res.data)
-        df['ds'] = pd.to_datetime(df['created_at']).dt.date
-        df = df.groupby('ds')['quantity'].sum().reset_index()
-        df.columns = ['ds', 'y']
-
-        # 3. Train Model
-        m = Prophet(yearly_seasonality=False, weekly_seasonality=True, daily_seasonality=False)
-        m.fit(df)
-
-        # 4. Predict Today
-        future = m.make_future_dataframe(periods=1)
-        forecast = m.predict(future)
-        
-        prediction = forecast.iloc[-1]['yhat']
-        return max(0, round(prediction, 1))
-
-    except Exception as e:
-        logger.error(f"Prophet training failed for {item_name}: {e}")
-        return 10.0
-
-def get_weather_impact() -> float:
+def get_sales_from_order_items(item_name: str, days_back: int = 90) -> pd.DataFrame:
+    if not supabase: return pd.DataFrame()
     try:
-        url = "https://api.open-meteo.com/v1/forecast?latitude=-26.85&longitude=26.66&daily=precipitation_probability_max&forecast_days=1"
-        r = requests.get(url, timeout=3).json()
-        prob = r["daily"]["precipitation_probability_max"][0]
-        return 0.75 if prob > 50 else 1.0
-    except:
-        return 1.0
+        items = supabase.table("order_items").select("order_id, quantity").ilike("item_name", f"%{item_name}%").execute()
+        if not items.data: return pd.DataFrame()
+        order_ids = [it["order_id"] for it in items.data]
+        orders = supabase.table("orders").select("id, created_at").in_("id", order_ids).execute()
+        if not orders.data: return pd.DataFrame()
+        df = pd.merge(pd.DataFrame(items.data), pd.DataFrame(orders.data).rename(columns={"id": "order_id"}), on="order_id")
+        df["ds"] = pd.to_datetime(df["created_at"]).dt.date
+        return df.groupby("ds")["quantity"].sum().reset_index().rename(columns={"ds": "ds", "quantity": "y"})
+    except: return pd.DataFrame()
 
-# --- Endpoints ---
+def get_forecast(name: str, days_ahead: int = 7):
+    sales_df = get_sales_from_order_items(name)
+    if sales_df.empty or len(sales_df) < 2: return None
+    sales_df['ds'] = pd.to_datetime(sales_df['ds'])
+    m = Prophet(yearly_seasonality=False, weekly_seasonality=True, daily_seasonality=False)
+    m.add_country_holidays(country_name="ZA")
+    m.fit(sales_df)
+    future = m.make_future_dataframe(periods=days_ahead)
+    forecast = m.predict(future)
+    weather = get_klerksdorp_weather(days_ahead)
+    forecast["yhat"] = forecast.apply(lambda x: x["yhat"] * weather.get(x["ds"].strftime("%Y-%m-%d"), 1.0), axis=1)
+    return forecast[forecast["ds"] > pd.to_datetime(sales_df["ds"].max())]
 
-@app.get("/", response_class=HTMLResponse)
-async def serve_dashboard():
-    base_path = Path(__file__).parent
-    file_path = base_path / "index.html"
-    if file_path.exists():
-        return FileResponse(file_path)
-    return HTMLResponse(content="<h1>index.html not found</h1>", status_code=404)
+@app.post("/api/forecast-meals")
+async def forecast_meals():
+    # Define your main menu items here
+    meals = ["Kota King", "Special Kota", "Classic Burger", "Russian & Chips"]
+    results = {}
+    for meal in meals:
+        f = get_forecast(meal, 1)
+        results[meal] = round(float(f["yhat"].iloc[0]), 1) if f is not None else 10.0
+    return results
 
 @app.post("/api/dashboard")
 async def dashboard(req: DashboardRequest):
-    try:
-        weather_factor = get_weather_impact()
+    out = []
+    weather = get_klerksdorp_weather(7)
+    for entry in req.items:
+        name = entry.item_name
+        sales_df = get_sales_from_order_items(name)
+        weekly_demand = 70.0 # Default
+        if not sales_df.empty:
+            f = get_forecast(name, 7)
+            if f is not None: weekly_demand = float(f["yhat"].sum())
         
-        # 1. Prophet Meal Sales Forecast (For the Bar Graph)
-        # This replaces the simulated logic with actual Prophet predictions
-        meals = ["Special Kota", "Cheese Burger", "Magwinya", "Full Chips"]
-        meal_forecast = {}
+        stock = entry.current_stock or 0
+        daily = weekly_demand / 7.0
+        days_left = stock / daily if daily > 0 else 99
         
-        for meal in meals:
-            p_val = get_prophet_forecast(meal)
-            meal_forecast[meal] = round(p_val * weather_factor, 1)
+        out.append({
+            "item_name": name,
+            "current_stock": round(stock, 1),
+            "daily_usage": round(daily, 1),
+            "weekly_demand": round(weekly_demand, 1),
+            "days_left": round(days_left, 1),
+            "urgency": "HIGH" if days_left < 3 else "MEDIUM" if days_left < 7 else "LOW",
+            "status": "CRITICAL" if days_left < 3 else "OK",
+            "action": "REORDER" if days_left < 3 else "Monitor"
+        })
+    return {"summary": {"total_items": len(out), "critical_items": len([x for x in out if x["urgency"]=="HIGH"]), "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}, "items": out}
 
-        # 2. Detailed Ingredient Intelligence (For the Table)
-        output_items = []
-        critical_count = 0
-        
-        for entry in req.items:
-            stock = entry.current_stock if entry.current_stock is not None else 0.0
-            
-            # Using fixed logic for usage (or pull from your separate usage function)
-            daily_usage = 12.0 
-            weekly_demand = daily_usage * 7
-            days_left = round(stock / daily_usage, 1) if daily_usage > 0 else 99
-            reorder_qty = max(0, round((weekly_demand * 1.5) - stock, 1))
-            
-            urgency = "HIGH" if days_left < 3 else ("MEDIUM" if days_left < 7 else "LOW")
-            if urgency == "HIGH": critical_count += 1
-
-            output_items.append({
-                "item_name": entry.item_name,
-                "current_stock": stock,
-                "daily_usage": daily_usage,
-                "weekly_demand": weekly_demand,
-                "days_left": days_left,
-                "recommended_order": reorder_qty,
-                "urgency": urgency,
-                "status": "CRITICAL" if urgency == "HIGH" else "STABLE",
-                "action": "ORDER NOW" if urgency == "HIGH" else "Monitor"
-            })
-
-        return {
-            "summary": {
-                "total_items": len(output_items),
-                "critical_items": critical_count,
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S SAST")
-            },
-            "meal_forecast": meal_forecast,
-            "items": output_items
-        }
-    except Exception as e:
-        logger.exception("Dashboard API Processing Error")
-        raise HTTPException(status_code=500, detail=str(e))
+@app.get("/", response_class=HTMLResponse)
+async def serve_dashboard():
+    with open("index.html", "r") as f: return f.read()
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
