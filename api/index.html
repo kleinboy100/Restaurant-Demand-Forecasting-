@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>KOTAai Dashboard | Kota King Klerksdorp</title>
+  <title>KOTAai Ingredient Intelligence</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     :root {
@@ -12,167 +12,156 @@
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      font-family: 'Segoe UI', system-ui, sans-serif;
-      background: #f0f4f8; color: var(--text); padding: 15px;
+      font-family: 'Segoe UI', sans-serif;
+      background: #f0f4f8; color: var(--text); padding: 10px;
     }
-    .container { max-width: 1300px; margin: 0 auto; }
+    .container { max-width: 100%; margin: 0 auto; overflow-x: hidden; }
     header {
-      background: var(--header); color: white; padding: 1.5rem;
-      border-radius: 16px; margin-bottom: 20px; text-align: center;
+      background: var(--header); color: white; padding: 1rem;
+      border-radius: 12px; margin-bottom: 15px; text-align: center;
     }
     .summary-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr 2fr;
-      gap: 18px; margin-bottom: 25px;
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 10px; margin-bottom: 15px;
     }
     .summary-card {
-      background: white; border-radius: 16px; padding: 20px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.07);
+      background: var(--card); border-radius: 12px; padding: 15px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.05); border-top: 4px solid var(--low);
     }
-    .summary-value { font-size: 2.2rem; font-weight: 800; color: var(--header); }
-    
-    .dashboard-section {
-      background: white; border-radius: 16px; padding: 22px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.07); margin-bottom: 25px;
+    .summary-card.critical { border-top-color: var(--high); }
+    .summary-value { font-size: 1.5rem; font-weight: 800; color: var(--header); }
+
+    .chart-container {
+      background: white; border-radius: 12px; padding: 15px;
+      margin-bottom: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+      height: 300px;
     }
-    .table-container { width: 100%; overflow-x: auto; }
-    table { width: 100%; border-collapse: collapse; min-width: 1000px; margin-top: 15px; }
-    th { background: var(--header); color: white; padding: 14px; text-align: left; }
-    td { padding: 14px; border-bottom: 1px solid #e2e8f0; }
+
+    .table-section {
+      background: white; border-radius: 12px; padding: 15px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.05); overflow-x: auto;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th { background: #edf2f7; padding: 10px; text-align: left; }
+    td { padding: 10px; border-bottom: 1px solid #e2e8f0; }
     
     .urgency-badge {
-      padding: 4px 12px; border-radius: 20px; font-weight: 600; font-size: 0.8rem;
+      padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: bold;
     }
-    .urgency-high { background: #fff5f5; color: var(--high); border: 1px solid var(--high); }
-    .urgency-medium { background: #fff8e6; color: var(--medium); border: 1px solid var(--medium); }
-    .urgency-low { background: #f6fff6; color: var(--low); border: 1px solid var(--low); }
-    
-    .usage-text { color: #c53030; font-weight: 700; background: #fff5f5; padding: 2px 6px; border-radius: 4px; }
-    .btn { background: var(--header); color: white; border: none; padding: 10px 20px; border-radius: 50px; cursor: pointer; font-weight: bold; }
-    .chart-box { height: 180px; width: 100%; margin-top: 10px; }
+    .urgency-high { background: #fed7d7; color: #c53030; }
+
+    @media (max-width: 600px) {
+      .summary-value { font-size: 1.2rem; }
+      th, td { padding: 6px; }
+    }
   </style>
 </head>
 <body>
   <div class="container">
     <header>
-      <h1>🍛 KOTAai INGREDIENT INTELLIGENCE</h1>
-      <p>Real-Time Stock & Daily Meal Sales Forecasting</p>
+      <h1>🍛 KOTAai SMART DASHBOARD</h1>
+      <p>Nosty'$ Fresh Fast Food Jouberton</p>
     </header>
 
     <div class="summary-grid">
       <div class="summary-card">
-        <p style="color: #666; font-weight: 600;">📦 Items Tracked</p>
+        <p>Items</p>
         <div class="summary-value" id="total-items">-</div>
       </div>
-      <div class="summary-card">
-        <p style="color: #666; font-weight: 600;">🚨 Critical Stock</p>
-        <div class="summary-value" id="critical-items" style="color: var(--high);">-</div>
+      <div class="summary-card critical">
+        <p>Critical</p>
+        <div class="summary-value" id="critical-items">-</div>
       </div>
       <div class="summary-card">
-        <h3 style="font-size: 1rem; color: #4a5568;">📊 Today's Sales Forecast (Units)</h3>
-        <div class="chart-box">
-          <canvas id="mealChart"></canvas>
-        </div>
+        <p>Updated</p>
+        <div class="summary-value" id="last-update" style="font-size: 1rem;">-</div>
       </div>
     </div>
 
-    <div class="dashboard-section">
-      <div style="display: flex; justify-content: space-between; align-items: center;">
-        <h2>📋 Live Ingredient Inventory & Usage</h2>
-        <button class="btn" onclick="fetchData()">🔄 Refresh Data</button>
-      </div>
-      <div class="table-container">
-        <table>
-          <thead>
-            <tr>
-              <th>Ingredient</th>
-              <th>Current Stock</th>
-              <th>Used Today</th>
-              <th>Weekly Demand</th>
-              <th>Days Left</th>
-              <th>Reorder Qty</th>
-              <th>Urgency</th>
-              <th>Status</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody id="table-body">
-            </tbody>
-        </table>
-      </div>
+    <div class="chart-container">
+      <h3 style="margin-bottom:10px;">📈 Expected Meals to be Sold (Today)</h3>
+      <canvas id="mealChart"></canvas>
+    </div>
+
+    <div class="table-section">
+      <h3 style="margin-bottom:10px;">📋 Stock & Intelligence</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Ingredient</th>
+            <th>Stock</th>
+            <th>Usage</th>
+            <th>Days</th>
+            <th>Urgency</th>
+          </tr>
+        </thead>
+        <tbody id="table-body"></tbody>
+      </table>
     </div>
   </div>
 
   <script>
     let mealChart = null;
-    const ingredientList = ["Atchaar", "Bacon", "Burger patty", "Brown bread", "Cheese", "Chips", "Egg", "Polony", "Vienna", "White bread"];
 
-    async function fetchData() {
+    async function updateData() {
       try {
-        const response = await fetch('/api/dashboard', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ items: ingredientList.map(name => ({ item_name: name })) })
-        });
-        const data = await response.json();
+        // 1. Fetch Meal Forecasts
+        const mealRes = await fetch('/api/forecast-meals', {method:'POST'});
+        const mealData = await mealRes.json();
+        renderChart(mealData);
 
-        // 1. Update Summaries
+        // 2. Fetch Ingredient Dashboard
+        const ingredients = ["Chips", "Cheese", "Russian", "Bread", "Tomato", "Atchaar", "Egg", "Steak", "Polony"];
+        const dashRes = await fetch('/api/dashboard', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ items: ingredients.map(n => ({item_name: n})) })
+        });
+        const data = await dashRes.json();
+
         document.getElementById('total-items').textContent = data.summary.total_items;
         document.getElementById('critical-items').textContent = data.summary.critical_items;
+        document.getElementById('last-update').textContent = data.summary.timestamp.split(' ')[1];
 
-        // 2. Update Table
         const tbody = document.getElementById('table-body');
-        tbody.innerHTML = data.items.map(item => `
-          <tr style="${item.urgency === 'HIGH' ? 'background-color: #fffafa;' : ''}">
+        tbody.innerHTML = '';
+        data.items.forEach(item => {
+          const row = `<tr>
             <td><strong>${item.item_name}</strong></td>
             <td>${item.current_stock}</td>
-            <td><span class="usage-text">${item.daily_usage}</span></td>
-            <td>${item.weekly_demand}</td>
+            <td>${item.daily_usage}</td>
             <td>${item.days_left}</td>
-            <td><strong>${item.recommended_order}</strong></td>
             <td><span class="urgency-badge urgency-${item.urgency.toLowerCase()}">${item.urgency}</span></td>
-            <td><strong>${item.status}</strong></td>
-            <td><small>${item.action}</small></td>
-          </tr>
-        `).join('');
-
-        // 3. Update Chart
-        updateChart(data.meal_forecast);
-
-      } catch (err) {
-        console.error("Fetch Error:", err);
-      }
+          </tr>`;
+          tbody.innerHTML += row;
+        });
+      } catch (e) { console.error(e); }
     }
 
-    function updateChart(forecast) {
+    function renderChart(data) {
       const ctx = document.getElementById('mealChart').getContext('2d');
       if (mealChart) mealChart.destroy();
-      
       mealChart = new Chart(ctx, {
         type: 'bar',
         data: {
-          labels: Object.keys(forecast),
+          labels: Object.keys(data),
           datasets: [{
-            data: Object.values(forecast),
+            label: 'Projected Sales',
+            data: Object.values(data),
             backgroundColor: '#3182ce',
-            borderRadius: 6,
-            barThickness: 25
+            borderRadius: 5
           }]
         },
         options: {
           responsive: true,
           maintainAspectRatio: false,
-          plugins: { legend: { display: false } },
-          scales: {
-            y: { beginAtZero: true, grid: { display: false } },
-            x: { grid: { display: false } }
-          }
+          scales: { y: { beginAtZero: true } }
         }
       });
     }
 
-    // Initial Load
-    fetchData();
+    updateData();
+    setInterval(updateData, 300000);
   </script>
 </body>
   </html>
