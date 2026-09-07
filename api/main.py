@@ -1,6 +1,6 @@
 import os
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional, List, Dict
 
 import pandas as pd
@@ -15,7 +15,7 @@ import requests
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="KOTAai Ingredient Intelligence", version="5.0.0")
+app = FastAPI(title="KOTAai Ingredient Intelligence", version="5.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -45,14 +45,55 @@ class DashboardItem(BaseModel):
 class DashboardRequest(BaseModel):
     items: List[DashboardItem]
 
-# Standard Recipe (Bill of Materials) mapping meals to ingredient quantities
+# Standard Recipe (Bill of Materials) mapping menu items to EXACT database ingredient names
 RECIPES: Dict[str, Dict[str, float]] = {
-    "Original Dagwood": {"Bread": 3, "Bacon": 1, "Polony": 1, "Egg": 1, "Cheese": 1, "Atchar": 1, "Secret Sauce": 1},
-    "Laprovance": {"Loaf": 0.25, "Chips": 1, "Vienna": 1, "Polony": 1, "Cheese": 1, "Atchar": 1},
-    "Tower of Terror": {"Loaf": 0.5, "Chips": 1, "Burger": 1, "Bacon": 2, "Cheese": 2, "Egg": 1, "Nosty Sauce": 1},
-    "N12_3 Loaf": {"Loaf": 0.33, "Chips": 1, "Boere Wors": 1, "Cheese": 1, "Atchar": 1},
-    "Combo 45": {"Bread": 2, "Chicken Stripes": 1, "Chips": 1, "Cheese": 1},
-    "Ext 10": {"Bread": 2, "Ham": 1, "Polony": 1, "Cheese": 1, "Atchar": 1}
+    "Original Dagwood": {
+        "Bread": 3,
+        "Bacon": 1,
+        "Polony": 1,
+        "Egg": 1,
+        "Cheese": 1,
+        "Atchar": 1,
+        "Secret Sauce": 1
+    },
+    "Laprovance": {
+        "Loaf": 0.25,
+        "Chips": 1,
+        "Vienna": 1,
+        "Polony": 1,
+        "Cheese": 1,
+        "Atchar": 1,
+        "Nosty Sauce": 1
+    },
+    "Tower of Terror": {
+        "Loaf": 0.5,
+        "Chips": 1,
+        "Burger": 1,
+        "Bacon": 2,
+        "Cheese": 2,
+        "Egg": 1,
+        "Nosty Sauce": 1
+    },
+    "N12_3 Loaf": {
+        "Loaf": 0.33,
+        "Chips": 1,
+        "Boere Wors": 1,
+        "Cheese": 1,
+        "Atchar": 1
+    },
+    "Combo 45": {
+        "Bread": 2,
+        "Chicken Stripes": 1,
+        "Chips": 1,
+        "Cheese": 1
+    },
+    "Ext 10": {
+        "Bread": 2,
+        "Ham": 1,
+        "Polony": 1,
+        "Cheese": 1,
+        "Atchar": 1
+    }
 }
 
 def get_weather_impact() -> float:
@@ -80,7 +121,6 @@ def get_sma_fallback(item_name: str, days: int = 7) -> float:
             return 0.0
         
         total_qty = df["quantity"].sum()
-        # Estimate average daily velocity over available records
         avg_daily = total_qty / max(len(df), 1)
         return max(0.0, avg_daily * days)
     except Exception as e:
@@ -108,7 +148,6 @@ def run_safe_forecast(name: str, days: int = 7) -> Optional[pd.DataFrame]:
         df["ds"] = pd.to_datetime(df["created_at"]).dt.tz_localize(None).dt.date
         daily = df.groupby("ds")["quantity"].sum().reset_index().rename(columns={"ds": "ds", "quantity": "y"})
         
-        # Require minimum 3 historical data points for Prophet time-series stability
         if len(daily) < 3: 
             return None
             
@@ -117,7 +156,6 @@ def run_safe_forecast(name: str, days: int = 7) -> Optional[pd.DataFrame]:
         future = m.make_future_dataframe(periods=days)
         forecast = m.predict(future)
         
-        # Clip negative predictions to 0
         forecast["yhat"] = forecast["yhat"].clip(lower=0.0)
         return forecast.tail(days)
     except Exception as e:
@@ -140,7 +178,7 @@ def calculate_ingredient_demand(ingredient_name: str, days: int = 7) -> float:
                 
             total_demand += predicted_meal_sales * recipe[ingredient_name]
             
-    # Direct fallback if ingredient is sold as a standalone item or not in preset recipes
+    # Fallback to direct historical order search if ingredient is sold standalone
     if matched_meals == 0:
         f = run_safe_forecast(ingredient_name, days)
         if f is not None:
@@ -172,13 +210,13 @@ async def dashboard(req: DashboardRequest):
     total_rec = 0.0
     
     for entry in req.items:
-        name = entry.item_name
+        name = entry.item_name.strip()
         
-        # 1. Fetch stock from database or payload fallback
+        # 1. Fetch stock directly using exact ingredient name matching
         stock = 0.0
         if supabase:
             try:
-                stock_res = supabase.table("ingredient_stock").select("current_stock").ilike("ingredient_name", f"%{name}%").execute()
+                stock_res = supabase.table("ingredient_stock").select("current_stock").ilike("ingredient_name", name).execute()
                 if stock_res.data:
                     stock = float(stock_res.data[0]["current_stock"])
                 elif entry.current_stock is not None:
@@ -189,12 +227,12 @@ async def dashboard(req: DashboardRequest):
         else:
             stock = float(entry.current_stock or 0.0)
         
-        # 2. Run recipe-aware demand forecasting for 7 days
+        # 2. Recipe demand calculation
         weekly = calculate_ingredient_demand(name, days=7)
         daily = weekly / 7.0
         days_left = (stock / daily) if daily > 0 else (99.0 if stock > 0 else 0.0)
         
-        # 3. Buffer logic: 1.5x weekly demand minus current stock
+        # 3. Buffer reorder calculation (1.5x weekly demand minus stock)
         recommend = max(0.0, (weekly * 1.5) - stock)
         total_rec += recommend
         
