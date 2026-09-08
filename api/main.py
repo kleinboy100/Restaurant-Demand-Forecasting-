@@ -2,8 +2,8 @@ import os
 import logging
 import math
 import re
-from datetime import datetime, timedelta
-from typing import Optional, List, Dict
+from datetime import datetime
+from typing import Optional, List, Dict, Union
 
 import numpy as np
 import pandas as pd
@@ -18,7 +18,7 @@ import requests
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="KOTAai Ingredient Intelligence", version="5.3.0")
+app = FastAPI(title="KOTAai Ingredient Intelligence", version="5.4.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -48,21 +48,14 @@ class DashboardItem(BaseModel):
 class DashboardRequest(BaseModel):
     items: List[DashboardItem]
 
+class MealForecastRequest(BaseModel):
+    meals: Optional[List[str]] = None
+
 # Complete Bill of Materials (BOM)
 RECIPES: Dict[str, Dict[str, float]] = {
-    "BBL Tower of Terror": {
-        "Bacon": 1.0, "Bread": 0.25, "Cheese": 1.0, "Chips": 0.2, "Egg": 1.0, 
-        "Frankfurter": 1.0, "Lettuce": 0.005, "Polony": 0.0025, "Rib Burger": 1.0, 
-        "Russian": 1.0, "Secret Sauce": 0.0005, "Vienna": 1.0
-    },
-    "Bosrand": {
-        "Bread": 0.25, "Cheese": 1.0, "Chips": 0.4, "Egg": 1.0, 
-        "Lettuce": 0.005, "Polony": 0.00025, "Secret Sauce": 0.005, "Unico Russian": 1.0
-    },
-    "Cheesy D": {
-        "Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 0.2, 
-        "Egg": 1.0, "Lettuce": 0.005, "Secret Sauce": 0.025, "Unico Russian": 1.0
-    },
+    "BBL Tower of Terror": {"Bacon": 1.0, "Bread": 0.25, "Cheese": 1.0, "Chips": 0.2, "Egg": 1.0, "Frankfurter": 1.0, "Lettuce": 0.005, "Polony": 0.0025, "Rib Burger": 1.0, "Russian": 1.0, "Secret Sauce": 0.0005, "Vienna": 1.0},
+    "Bosrand": {"Bread": 0.25, "Cheese": 1.0, "Chips": 0.4, "Egg": 1.0, "Lettuce": 0.005, "Polony": 0.00025, "Secret Sauce": 0.005, "Unico Russian": 1.0},
+    "Cheesy D": {"Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 0.2, "Egg": 1.0, "Lettuce": 0.005, "Secret Sauce": 0.025, "Unico Russian": 1.0},
     "Chips Extra Large": {"Chips": 4.0},
     "Chips Large": {"Chips": 3.0},
     "Chips Medium": {"Chips": 2.0},
@@ -74,109 +67,37 @@ RECIPES: Dict[str, Dict[str, float]] = {
     "Combo 35": {"Chips": 0.3, "Magwenya": 6.0, "Polony": 0.025, "Unico Russian": 1.0},
     "Combo 45": {"Atchar": 2.5, "Chips": 1.0, "Liver": 1.0, "Magwenya": 6.0, "Russian": 1.0},
     "Curry Fish Kota": {"Atchar": 1.0, "Bread": 0.25, "Curry Fish": 1.0},
-    "Dark City": {
-        "Bread": 0.25, "Cheese": 1.0, "Cheesy Russian": 1.0, "Chips": 1.0, 
-        "Egg": 1.0, "Lettuce": 1.0, "Secret Sauce": 1.0
-    },
-    "Di_Y_Kota": {
-        "Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, 
-        "Egg": 1.0, "Ham": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Secret Sauce": 1.0
-    },
-    "Di_Z_Kota": {
-        "Bread": 0.25, "Cheese": 1.0, "Cheesy Russian": 1.0, "Chips": 1.0, 
-        "Egg": 1.0, "Lettuce": 1.0, "Secret Sauce": 1.0
-    },
-    "Down": {
-        "Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, 
-        "Egg": 1.0, "Lettuce": 1.0, "Secret Sauce": 1.0
-    },
-    "Ext 10": {
-        "Bread": 0.25, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, 
-        "Nosty Sauce": 1.0, "Polony": 0.025
-    },
-    "Ext 6": {
-        "Bacon": 1.0, "Bread": 0.25, "Chips": 1.0, "Egg": 1.0, "Fish Fillet": 1.0, 
-        "Lettuce": 1.0, "Russian": 1.0, "Secret Sauce": 1.0
-    },
-    "Flamwood": {
-        "Bacon": 1.0, "Bread": 0.25, "Cheese": 1.0, "Chicken Stripes": 1.0, 
-        "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Secret Sauce": 1.0
-    },
-    "J_town": {
-        "Atchar": 1.0, "Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, 
-        "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Secret Sauce": 1.0, "Tomato": 0.167
-    },
-    "La Hof": {
-        "Bacon": 1.0, "Bread": 0.25, "Cheesy Russian": 1.0, "Chicken Stripes": 1.0, 
-        "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Secret Sauce": 1.0
-    },
-    "Laprovance": {
-        "Bacon": 1.0, "Boere Wors": 1.0, "Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, 
-        "Club Stake": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Onion": 0.0125, "Polony": 0.025, 
-        "Russian": 1.0, "Secret Sauce": 1.0
-    },
-    "Matlosana Dagwood": {
-        "Bacon": 1.0, "Bread": 1.0, "Cheese": 2.0, "Cheesy Russian": 1.0, 
-        "Club Stake": 1.0, "Egg": 1.0, "Nosty Sauce": 1.0, "Onion": 0.0125, "Tomato": 0.167
-    },
+    "Dark City": {"Bread": 0.25, "Cheese": 1.0, "Cheesy Russian": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Secret Sauce": 1.0},
+    "Di_Y_Kota": {"Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Ham": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Secret Sauce": 1.0},
+    "Di_Z_Kota": {"Bread": 0.25, "Cheese": 1.0, "Cheesy Russian": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Secret Sauce": 1.0},
+    "Down": {"Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Secret Sauce": 1.0},
+    "Ext 10": {"Bread": 0.25, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Nosty Sauce": 1.0, "Polony": 0.025},
+    "Ext 6": {"Bacon": 1.0, "Bread": 0.25, "Chips": 1.0, "Egg": 1.0, "Fish Fillet": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Secret Sauce": 1.0},
+    "Flamwood": {"Bacon": 1.0, "Bread": 0.25, "Cheese": 1.0, "Chicken Stripes": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Secret Sauce": 1.0},
+    "J_town": {"Atchar": 1.0, "Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Secret Sauce": 1.0, "Tomato": 0.167},
+    "La Hof": {"Bacon": 1.0, "Bread": 0.25, "Cheesy Russian": 1.0, "Chicken Stripes": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Secret Sauce": 1.0},
+    "Laprovance": {"Bacon": 1.0, "Boere Wors": 1.0, "Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Club Stake": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Onion": 0.0125, "Polony": 0.025, "Russian": 1.0, "Secret Sauce": 1.0},
+    "Matlosana Dagwood": {"Bacon": 1.0, "Bread": 1.0, "Cheese": 2.0, "Cheesy Russian": 1.0, "Club Stake": 1.0, "Egg": 1.0, "Nosty Sauce": 1.0, "Onion": 0.0125, "Tomato": 0.167},
     "Mince Kota": {"Atchar": 1.0, "Bread": 0.25, "Mince": 1.0},
-    "Mofarasai Dagwood": {
-        "Bacon": 1.0, "Bread": 1.0, "Cheese": 2.0, "Cheesy Russian": 1.0, 
-        "Egg": 1.0, "Nosty Sauce": 1.0, "Rib Burger": 1.0, "Tomato": 0.167
-    },
-    "N12_1": {
-        "Bread": 1.0, "Cheese": 2.0, "Chips": 1.0, "Egg": 2.0, "Loaf": 0.25, 
-        "Nosty Sauce": 1.0, "Polony": 0.1, "Russian": 1.0, "Vienna": 1.0
-    },
-    "N12_2": {
-        "Bread": 1.0, "Burger": 1.0, "Cheese": 2.0, "Chips": 1.0, "Egg": 2.0, 
-        "Loaf": 0.25, "Nosty Sauce": 1.0, "Polony": 0.15, "Russian": 1.0, "Vienna": 1.0
-    },
-    "N12_3": {
-        "Bacon": 1.0, "Bread": 1.0, "Burger": 2.0, "Cheese": 3.0, "Chips": 2.0, 
-        "Egg": 3.0, "Loaf": 0.25, "Nosty Sauce": 1.0, "Polony": 0.2, "Russian": 2.0, "Vienna": 2.0
-    },
-    "N12_4": {
-        "Bacon": 2.0, "Bread": 1.0, "Burger": 2.0, "Cheese": 4.0, "Chips": 2.0, 
-        "Egg": 4.0, "Loaf": 0.25, "Nosty Sauce": 1.0, "Polony": 0.25, "Russian": 3.0, "Vienna": 3.0
-    },
-    "Original Dagwood": {
-        "Bacon": 1.0, "Bread": 1.0, "Burger": 1.0, "Cheese": 1.0, "Egg": 1.0, 
-        "Nosty Sauce": 1.0, "Russian": 1.0, "Tomato": 0.167
-    },
-    "Phelandaba": {
-        "Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, 
-        "Russian": 1.0, "Secret Sauce": 1.0
-    },
-    "Stop 1": {
-        "Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, 
-        "Polony": 0.025, "Secret Sauce": 1.0
-    },
-    "Stop 18": {
-        "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, 
-        "Lettuce": 1.0, "Polony": 0.025, "Russian": 1.0, "Secret Sauce": 1.0
-    },
-    "Stop 5_1": {
-        "Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, 
-        "Secret Sauce": 1.0, "Vienna": 1.0
-    },
-    "Stop 5+": {
-        "Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Ham": 1.0, 
-        "Lettuce": 1.0, "Secret Sauce": 1.0, "Vienna": 1.0
-    },
-    "Sun City": {
-        "Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Frankfurter": 1.0, 
-        "Lettuce": 1.0, "Secret Sauce": 1.0
-    },
-    "Tower of Terror": {
-        "Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, 
-        "Egg": 1.0, "Frankfurter": 1.0, "Lettuce": 1.0, "Polony": 0.025, "Russian": 1.0, "Secret Sauce": 1.0
-    },
-    "Turbo Dagwood": {
-        "Bread": 1.0, "Cheese": 1.0, "Chicken Russian": 1.0, "Egg": 1.0, 
-        "Nosty Sauce": 1.0, "Rib Burger": 1.0, "Tomato": 0.167
-    }
+    "Mofarasai Dagwood": {"Bacon": 1.0, "Bread": 1.0, "Cheese": 2.0, "Cheesy Russian": 1.0, "Egg": 1.0, "Nosty Sauce": 1.0, "Rib Burger": 1.0, "Tomato": 0.167},
+    "N12_1": {"Bread": 1.0, "Cheese": 2.0, "Chips": 1.0, "Egg": 2.0, "Loaf": 0.25, "Nosty Sauce": 1.0, "Polony": 0.1, "Russian": 1.0, "Vienna": 1.0},
+    "N12_2": {"Bread": 1.0, "Burger": 1.0, "Cheese": 2.0, "Chips": 1.0, "Egg": 2.0, "Loaf": 0.25, "Nosty Sauce": 1.0, "Polony": 0.15, "Russian": 1.0, "Vienna": 1.0},
+    "N12_3": {"Bacon": 1.0, "Bread": 1.0, "Burger": 2.0, "Cheese": 3.0, "Chips": 2.0, "Egg": 3.0, "Loaf": 0.25, "Nosty Sauce": 1.0, "Polony": 0.2, "Russian": 2.0, "Vienna": 2.0},
+    "N12_4": {"Bacon": 2.0, "Bread": 1.0, "Burger": 2.0, "Cheese": 4.0, "Chips": 2.0, "Egg": 4.0, "Loaf": 0.25, "Nosty Sauce": 1.0, "Polony": 0.25, "Russian": 3.0, "Vienna": 3.0},
+    "Original Dagwood": {"Bacon": 1.0, "Bread": 1.0, "Burger": 1.0, "Cheese": 1.0, "Egg": 1.0, "Nosty Sauce": 1.0, "Russian": 1.0, "Tomato": 0.167},
+    "Phelandaba": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Secret Sauce": 1.0},
+    "Stop 1": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Polony": 0.025, "Secret Sauce": 1.0},
+    "Stop 18": {"Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Polony": 0.025, "Russian": 1.0, "Secret Sauce": 1.0},
+    "Stop 5_1": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Secret Sauce": 1.0, "Vienna": 1.0},
+    "Stop 5+": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Ham": 1.0, "Lettuce": 1.0, "Secret Sauce": 1.0, "Vienna": 1.0},
+    "Sun City": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Frankfurter": 1.0, "Lettuce": 1.0, "Secret Sauce": 1.0},
+    "Tower of Terror": {"Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Frankfurter": 1.0, "Lettuce": 1.0, "Polony": 0.025, "Russian": 1.0, "Secret Sauce": 1.0},
+    "Turbo Dagwood": {"Bread": 1.0, "Cheese": 1.0, "Chicken Russian": 1.0, "Egg": 1.0, "Nosty Sauce": 1.0, "Rib Burger": 1.0, "Tomato": 0.167}
 }
+
+def clean_name(term: str) -> str:
+    """Standardizes names by stripping symbols for fuzzy matching."""
+    return re.sub(r'[^a-zA-Z0-9]', '', term).lower()
 
 def get_weather_impact() -> float:
     try:
@@ -190,16 +111,7 @@ def get_weather_impact() -> float:
         logger.warning(f"Weather API unavailable: {e}")
         return 1.0
 
-def sanitize_query_term(term: str) -> str:
-    """Cleans up search names (e.g., 'N12_3' -> 'N12') to prevent zero SQL matches."""
-    cleaned = re.sub(r'[_+\-]', ' ', term).strip()
-    parts = cleaned.split()
-    return parts[0] if parts else term
-
 def fetch_continuous_sales_df(item_name: str, lookback_days: int = 30) -> pd.DataFrame:
-    """
-    Fetches raw daily order data with resilient item matching and continuous dates.
-    """
     today = pd.Timestamp.now().floor('D')
     start_date = today - pd.Timedelta(days=lookback_days - 1)
     full_date_range = pd.date_range(start=start_date, end=today, freq='D')
@@ -209,31 +121,35 @@ def fetch_continuous_sales_df(item_name: str, lookback_days: int = 30) -> pd.Dat
         return default_df
 
     try:
-        # Search using sanitized root term to ensure database matches
-        clean_search = sanitize_query_term(item_name)
-        res = supabase.table("order_items").select("*").ilike("item_name", f"%{clean_search}%").execute()
+        # Flexible query using clean token match
+        search_token = item_name.split()[0] if item_name.split() else item_name
+        res = supabase.table("order_items").select("*").ilike("item_name", f"%{search_token}%").execute()
         
         if not res.data:
-            # Fallback retry with raw item name
-            res = supabase.table("order_items").select("*").ilike("item_name", f"%{item_name}%").execute()
-            if not res.data:
-                return default_df
+            return default_df
 
         df_items = pd.DataFrame(res.data)
 
-        # Check if created_at is directly on order_items table
-        if "created_at" in df_items.columns:
-            df_items["ds"] = pd.to_datetime(df_items["created_at"]).dt.tz_localize(None).dt.floor('D')
-            daily_agg = df_items.groupby("ds")["quantity"].sum().reset_index().rename(columns={"quantity": "y"})
-        elif "order_id" in df_items.columns:
-            order_ids = df_items["order_id"].dropna().unique().tolist()
+        # Filter in Python using clean fuzzy matching
+        target_clean = clean_name(item_name)
+        df_items["clean_name"] = df_items["item_name"].astype(str).apply(clean_name)
+        df_matched = df_items[df_items["clean_name"].str.contains(target_clean, na=False) | df_items["clean_name"].apply(lambda x: target_clean in x)]
+
+        if df_matched.empty:
+            df_matched = df_items  # Fallback to broader match if specific match is empty
+
+        if "created_at" in df_matched.columns:
+            df_matched["ds"] = pd.to_datetime(df_matched["created_at"]).dt.tz_localize(None).dt.floor('D')
+            daily_agg = df_matched.groupby("ds")["quantity"].sum().reset_index().rename(columns={"quantity": "y"})
+        elif "order_id" in df_matched.columns:
+            order_ids = df_matched["order_id"].dropna().unique().tolist()
             if not order_ids:
                 return default_df
             orders = supabase.table("orders").select("id, created_at").in_("id", order_ids).execute()
             if not orders.data:
                 return default_df
             df_orders = pd.DataFrame(orders.data).rename(columns={"id": "order_id"})
-            df = pd.merge(df_items, df_orders, on="order_id")
+            df = pd.merge(df_matched, df_orders, on="order_id")
             df["ds"] = pd.to_datetime(df["created_at"]).dt.tz_localize(None).dt.floor('D')
             daily_agg = df.groupby("ds")["quantity"].sum().reset_index().rename(columns={"quantity": "y"})
         else:
@@ -246,25 +162,20 @@ def fetch_continuous_sales_df(item_name: str, lookback_days: int = 30) -> pd.Dat
         logger.error(f"Data Fetch Error [{item_name}]: {e}")
         return default_df
 
-def run_safe_forecast(name: str, days: int = 7) -> float:
-    """
-    Computes daily/weekly demand projection using Prophet or moving average fallbacks.
-    Guarantees a baseline prediction > 0 if historical sales exist anywhere.
-    """
+def run_safe_forecast(name: str, days: int = 1) -> float:
     df = fetch_continuous_sales_df(name, lookback_days=30)
     total_sales = df["y"].sum()
 
-    # If no sales found in database for this specific item name, return reasonable baseline estimate
+    # Dynamic fallback baseline if no sales recorded in Supabase (1.0 - 3.0 units)
     if total_sales == 0:
-        return float(days * 1.5)  # Baseline operational default (1.5 units/day)
+        return float(days * 1.5)
 
     recent_7d = df.tail(7)["y"].mean()
     recent_30d = df["y"].mean()
     nonzero_days = (df["y"] > 0).sum()
 
-    # Sparse sales logic (< 5 active days out of 30)
-    if nonzero_days < 5 or len(df[df["y"] > 0]) < 3:
-        avg_daily = max(recent_30d, recent_7d, 0.5)
+    if nonzero_days < 5:
+        avg_daily = max(recent_30d, recent_7d, 1.0)
         return float(avg_daily * days)
 
     try:
@@ -276,42 +187,28 @@ def run_safe_forecast(name: str, days: int = 7) -> float:
         future_yhat = forecast.tail(days)["yhat"].clip(lower=0.0)
         predicted = float(future_yhat.sum())
 
-        # Dynamic floor based on 7-day average
-        baseline_floor = float(recent_7d * days)
-        return max(predicted, baseline_floor, 1.0)
+        return max(predicted, float(recent_7d * days), 1.0)
     except Exception as e:
         logger.error(f"Prophet Exception [{name}]: {e}")
         return max(float(recent_30d * days), 1.0)
 
-def calculate_ingredient_demand(ingredient_name: str, days: int = 7) -> float:
-    total_demand = 0.0
-    matched_meals = 0
-    clean_target = ingredient_name.strip().lower()
-
-    for meal, recipe in RECIPES.items():
-        for ing, qty in recipe.items():
-            if ing.lower() == clean_target or clean_target in ing.lower():
-                matched_meals += 1
-                predicted_meal_sales = run_safe_forecast(meal, days)
-                total_demand += (predicted_meal_sales * qty)
-                break
-
-    if matched_meals == 0:
-        total_demand = run_safe_forecast(ingredient_name, days)
-
-    return max(0.0, total_demand)
-
 @app.post("/api/forecast-meals")
-async def forecast_meals():
-    top_meals = ["Original Dagwood", "Laprovance", "Tower of Terror", "N12_3", "Combo 45", "Ext 10"]
+async def forecast_meals(req: Optional[MealForecastRequest] = None):
+    # If the request provides a specific list of meals from the UI table, use it.
+    # Otherwise, calculate for ALL known menu items in RECIPES!
+    if req and req.meals and len(req.meals) > 0:
+        target_meals = req.meals
+    else:
+        target_meals = list(RECIPES.keys())
+
     impact = get_weather_impact()
     results = {}
 
-    for meal in top_meals:
+    for meal in target_meals:
         predicted_daily = run_safe_forecast(meal, days=1)
         adjusted_val = predicted_daily * impact
-
-        # Ensure expected daily sales display at least 1 unit if menu item exists
+        
+        # Guarantees a minimum non-zero realistic forecast for all active menu items
         results[meal] = max(1, math.ceil(adjusted_val))
 
     return results
@@ -323,26 +220,33 @@ async def dashboard(req: DashboardRequest):
 
     for entry in req.items:
         name = entry.item_name.strip()
+        stock = float(entry.current_stock or 0.0)
 
-        stock = 0.0
         if supabase:
             try:
                 stock_res = supabase.table("ingredient_stock").select("current_stock").ilike("ingredient_name", name).execute()
                 if stock_res.data:
                     stock = float(stock_res.data[0]["current_stock"])
-                elif entry.current_stock is not None:
-                    stock = float(entry.current_stock)
             except Exception as e:
                 logger.error(f"Stock fetch error [{name}]: {e}")
-                stock = float(entry.current_stock or 0.0)
-        else:
-            stock = float(entry.current_stock or 0.0)
 
-        weekly = calculate_ingredient_demand(name, days=7)
-        daily = weekly / 7.0
+        # Weekly ingredient requirement
+        weekly_demand = 0.0
+        clean_target = clean_name(name)
+        for meal_name, recipe in RECIPES.items():
+            for ing, qty in recipe.items():
+                if clean_name(ing) == clean_target or clean_target in clean_name(ing):
+                    meal_forecast = run_safe_forecast(meal_name, days=7)
+                    weekly_demand += (meal_forecast * qty)
+                    break
+
+        if weekly_demand == 0.0:
+            weekly_demand = run_safe_forecast(name, days=7)
+
+        daily = weekly_demand / 7.0
         days_left = (stock / daily) if daily > 0 else (99.0 if stock > 0 else 0.0)
 
-        recommend = max(0.0, (weekly * 1.5) - stock)
+        recommend = max(0.0, (weekly_demand * 1.5) - stock)
         total_rec += recommend
 
         urgency = "HIGH" if days_left < 3 else ("MEDIUM" if days_left < 7 else "LOW")
@@ -352,7 +256,7 @@ async def dashboard(req: DashboardRequest):
         out.append({
             "item_name": name,
             "current_stock": round(stock, 1),
-            "weekly_demand": round(weekly, 1),
+            "weekly_demand": round(weekly_demand, 1),
             "days_left": round(days_left, 1),
             "recommended_order": round(recommend, 1),
             "urgency": urgency,
