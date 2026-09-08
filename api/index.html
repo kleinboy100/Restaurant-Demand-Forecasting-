@@ -4,7 +4,6 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>KOTAai Ingredient Intelligence</title>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     :root { --high: #ff6b6b; --medium: #ffa502; --low: #4caf50; --header: #1a365d; --card: #ffffff; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -13,11 +12,10 @@
     header { background: var(--header); color: white; padding: 1.5rem; border-radius: 16px; margin-bottom: 20px; text-align: center; }
 
     .dashboard-section { background: white; border-radius: 16px; padding: 20px; margin-bottom: 25px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
-    .chart-container { height: 420px; margin-bottom: 20px; }
 
-    .table-container { width: 100%; overflow-x: auto; border-radius: 12px; }
-    table { width: 100%; border-collapse: collapse; min-width: 900px; font-size: 0.9rem; }
-    th { background: var(--header); color: white; text-align: left; padding: 14px; position: sticky; top: 0; }
+    .table-container { width: 100%; overflow-x: auto; border-radius: 12px; max-height: 400px; overflow-y: auto; }
+    table { width: 100%; border-collapse: collapse; min-width: 600px; font-size: 0.9rem; }
+    th { background: var(--header); color: white; text-align: left; padding: 14px; position: sticky; top: 0; z-index: 10; }
     td { padding: 14px; border-bottom: 1px solid #e2e8f0; font-weight: 500; }
     
     tr.critical-row { background-color: #fff5f5; border-left: 4px solid var(--high); }
@@ -34,11 +32,25 @@
       <p>Real-Time Stock Monitoring • Nosty'$ Fresh Fast Food</p>
     </header>
 
+    <!-- Meal Sales Forecast Table Section -->
     <div class="dashboard-section">
-      <h3>📈 Daily Meal Sales Forecast</h3>
-      <div class="chart-container"><canvas id="mealChart"></canvas></div>
+      <h3>📊 Daily Meal Sales Forecast</h3>
+      <div class="table-container" style="margin-top: 15px;">
+        <table>
+          <thead>
+            <tr>
+              <th>Meal Name</th>
+              <th>Expected Sales (Units)</th>
+            </tr>
+          </thead>
+          <tbody id="meal-forecast-body">
+            <tr><td colspan="2" style="text-align:center;">Loading meal forecasts...</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
 
+    <!-- Live Inventory Table Section -->
     <div class="dashboard-section">
       <h3>📋 Live Inventory Dashboard</h3>
       <div class="table-container">
@@ -64,35 +76,19 @@
   </div>
 
   <script>
-    let mealChart = null;
-
     async function fetchData() {
       try {
-        // 1. Forecast Chart
+        // 1. Forecast Table
         const mRes = await fetch('/api/forecast-meals', { method: 'POST' });
         const mData = await mRes.json();
-        const ctx = document.getElementById('mealChart').getContext('2d');
-        if (mealChart) mealChart.destroy();
-        mealChart = new Chart(ctx, {
-          type: 'bar',
-          data: {
-            labels: Object.keys(mData),
-            datasets: [{ label: 'Expected Sales', data: Object.values(mData), backgroundColor: '#3182ce', borderRadius: 5 }]
-          },
-          options: { 
-            responsive: true, 
-            maintainAspectRatio: false,
-            scales: {
-              x: {
-                ticks: {
-                  autoSkip: false,   // Prevents Chart.js from skipping meal labels
-                  maxRotation: 90,   // Rotates labels vertically if space is tight
-                  minRotation: 45
-                }
-              }
-            }
-          }
-        });
+        
+        const mealTbody = document.getElementById('meal-forecast-body');
+        mealTbody.innerHTML = Object.entries(mData).map(([meal, forecast]) => `
+          <tr>
+            <td><strong>${meal}</strong></td>
+            <td>${forecast}</td>
+          </tr>
+        `).join('');
 
         // 2. Full Inventory Table
         const ingredients = [
