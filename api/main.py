@@ -1,8 +1,10 @@
 import os
 import logging
-from datetime import datetime
+import math
+from datetime import datetime, timedelta
 from typing import Optional, List, Dict
 
+import numpy as np
 import pandas as pd
 from prophet import Prophet
 from pydantic import BaseModel
@@ -188,59 +190,96 @@ def get_weather_impact() -> float:
         logger.warning(f"Weather API unavailable: {e}")
         return 1.0
 
-def get_sma_fallback(item_name: str, days: int = 7) -> float:
-    """Computes 14-day Simple Moving Average (SMA) fallback if Prophet fails."""
+def fetch_continuous_sales_df(item_name: str, lookback_days: int = 30) -> pd.DataFrame:
+    """
+    Fetches raw daily order data and reindexes across a continuous date grid.
+    Fills zero-sales days with 0 to resolve zero-inflation/missing array errors.
+    """
+    today = pd.Timestamp.now().floor('D')
+    start_date = today - pd.Timedelta(days=lookback_days - 1)
+    full_date_range = pd.date_range(start=start_date, end=today, freq='D')
+    
     if not supabase:
-        return 0.0
+        return pd.DataFrame({"ds": full_date_range, "y": 0.0})
+    
     try:
-        res = supabase.table("order_items").select("quantity, created_at").ilike("item_name", f"%{item_name}%").limit(100).execute()
+        res = supabase.table("order_items").select("order_id, quantity").ilike("item_name", f"%{item_name}%").execute()
         if not res.data:
-            return 0.0
-        df = pd.DataFrame(res.data)
-        if df.empty:
-            return 0.0
-        
-        total_qty = df["quantity"].sum()
-        avg_daily = total_qty / max(len(df), 1)
-        return max(0.0, avg_daily * days)
-    except Exception as e:
-        logger.error(f"SMA Fallback Error [{item_name}]: {e}")
-        return 0.0
-
-def run_safe_forecast(name: str, days: int = 7) -> Optional[pd.DataFrame]:
-    """Runs a Prophet forecast with non-negative lower bounds."""
-    if not supabase: 
-        return None
-    try:
-        res = supabase.table("order_items").select("order_id, quantity").ilike("item_name", f"%{name}%").execute()
-        if not res.data: 
-            return None
-        
+            return pd.DataFrame({"ds": full_date_range, "y": 0.0})
+            
         order_ids = [it["order_id"] for it in res.data if "order_id" in it]
         if not order_ids:
-            return None
+            return pd.DataFrame({"ds": full_date_range, "y": 0.0})
             
         orders = supabase.table("orders").select("id, created_at").in_("id", order_ids).execute()
-        if not orders.data: 
-            return None
-        
-        df = pd.merge(pd.DataFrame(res.data), pd.DataFrame(orders.data).rename(columns={"id": "order_id"}), on="order_id")
-        df["ds"] = pd.to_datetime(df["created_at"]).dt.tz_localize(None).dt.date
-        daily = df.groupby("ds")["quantity"].sum().reset_index().rename(columns={"ds": "ds", "quantity": "y"})
-        
-        if len(daily) < 3: 
-            return None
+        if not orders.data:
+            return pd.DataFrame({"ds": full_date_range, "y": 0.0})
             
+        df_items = pd.DataFrame(res.data)
+        df_orders = pd.DataFrame(orders.data).rename(columns={"id": "order_id"})
+        df = pd.merge(df_items, df_orders, on="order_id")
+        
+        df["ds"] = pd.to_datetime(df["created_at"]).dt.tz_localize(None).dt.floor('D')
+        daily_agg = df.groupby("ds")["quantity"].sum().reset_index().rename(columns={"quantity": "y"})
+        
+        # Merge with contiguous date range to explicitly model non-sale days
+        continuous_df = pd.DataFrame({"ds": full_date_range})
+        merged_df = pd.merge(continuous_df, daily_agg, on="ds", how="left").fillna(0.0)
+        return merged_df
+    except Exception as e:
+        logger.error(f"Error fetching continuous time-series [{item_name}]: {e}")
+        return pd.DataFrame({"ds": full_date_range, "y": 0.0})
+
+def calculate_intermittent_fallback(df: pd.DataFrame, days_ahead: int = 7) -> float:
+    """
+    Calculates moving-average baseline demand for low-frequency/sparse items,
+    preventing non-zero intermittent products from truncating to 0.
+    """
+    if df.empty or df["y"].sum() == 0:
+        return 0.0
+
+    recent_7d_avg = df.tail(7)["y"].mean()
+    recent_30d_avg = df["y"].mean()
+    nonzero_days = (df["y"] > 0).sum()
+
+    if nonzero_days < 5:
+        # High sparsity baseline
+        predicted_daily_qty = max(recent_30d_avg, 0.5) if recent_30d_avg > 0 else 0.0
+    else:
+        # Weighted demand smoothing
+        predicted_daily_qty = (0.6 * recent_7d_avg) + (0.4 * recent_30d_avg)
+        predicted_daily_qty = max(0.5, predicted_daily_qty)
+
+    return float(predicted_daily_qty * days_ahead)
+
+def run_safe_forecast(name: str, days: int = 7) -> float:
+    """
+    Runs Prophet with floor controls or falls back to intermittent/moving-average logic.
+    Returns total projected demand quantity for the specified period.
+    """
+    df = fetch_continuous_sales_df(name, lookback_days=30)
+    nonzero_days = (df["y"] > 0).sum()
+
+    # Fallback if historical points are sparse or Prophet won't converge
+    if nonzero_days < 5:
+        return calculate_intermittent_fallback(df, days_ahead=days)
+
+    try:
         m = Prophet(yearly_seasonality=False, weekly_seasonality=True, daily_seasonality=False)
-        m.fit(daily)
+        m.fit(df)
         future = m.make_future_dataframe(periods=days)
         forecast = m.predict(future)
         
-        forecast["yhat"] = forecast["yhat"].clip(lower=0.0)
-        return forecast.tail(days)
+        # Take future period predictions and clip negative trends to 0
+        future_yhat = forecast.tail(days)["yhat"].clip(lower=0.0)
+        total_predicted = float(future_yhat.sum())
+
+        # Safety baseline threshold if Prophet severely underpredicts active demand
+        fallback_val = calculate_intermittent_fallback(df, days_ahead=days)
+        return max(total_predicted, fallback_val)
     except Exception as e:
-        logger.error(f"Forecast Error [{name}]: {e}")
-        return None
+        logger.error(f"Prophet Forecast Exception [{name}]: {e}")
+        return calculate_intermittent_fallback(df, days_ahead=days)
 
 def calculate_ingredient_demand(ingredient_name: str, days: int = 7) -> float:
     """Aggregates total demand for an ingredient across all recipes in the BOM."""
@@ -253,22 +292,13 @@ def calculate_ingredient_demand(ingredient_name: str, days: int = 7) -> float:
         for ing, qty in recipe.items():
             if ing.lower() == clean_target or clean_target in ing.lower():
                 matched_meals += 1
-                f = run_safe_forecast(meal, days)
-                if f is not None:
-                    predicted_meal_sales = float(f["yhat"].sum())
-                else:
-                    predicted_meal_sales = get_sma_fallback(meal, days)
-                
+                predicted_meal_sales = run_safe_forecast(meal, days)
                 total_demand += (predicted_meal_sales * qty)
                 break
             
     # Direct fallback if item is ordered standalone rather than via a meal recipe
     if matched_meals == 0:
-        f = run_safe_forecast(ingredient_name, days)
-        if f is not None:
-            total_demand = float(f["yhat"].sum())
-        else:
-            total_demand = get_sma_fallback(ingredient_name, days)
+        total_demand = run_safe_forecast(ingredient_name, days)
             
     return max(0.0, total_demand)
 
@@ -279,12 +309,11 @@ async def forecast_meals():
     results = {}
     
     for meal in top_meals:
-        f = run_safe_forecast(meal, 1)
-        if f is not None:
-            val = float(f["yhat"].iloc[0])
-        else:
-            val = get_sma_fallback(meal, 1)
-        results[meal] = round(max(0.0, val * impact), 1)
+        predicted_qty = run_safe_forecast(meal, days=1)
+        adjusted_val = predicted_qty * impact
+        
+        # Round up fractional demand to ensure low-frequency meals display baseline integer sales
+        results[meal] = math.ceil(adjusted_val) if adjusted_val > 0 else 0
         
     return results
 
