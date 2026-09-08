@@ -5,19 +5,60 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>KOTAai Ingredient Intelligence</title>
   <style>
-    :root { --high: #ff6b6b; --medium: #ffa502; --low: #4caf50; --header: #1a365d; --card: #ffffff; }
+    :root { 
+      --high: #ff6b6b; 
+      --medium: #ffa502; 
+      --low: #4caf50; 
+      --header: #1a365d; 
+      --card: #ffffff;
+      --accent: #2b6cb0;
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Segoe UI', sans-serif; background: #f0f4f8; padding: 15px; overflow-x: hidden; }
-    .container { max-width: 1200px; margin: 0 auto; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f4f8; padding: 15px; overflow-x: hidden; }
+    .container { max-width: 1250px; margin: 0 auto; }
+    
     header { background: var(--header); color: white; padding: 1.5rem; border-radius: 16px; margin-bottom: 20px; text-align: center; }
+    header h1 { font-size: 1.8rem; margin-bottom: 5px; }
+    header p { font-size: 0.95rem; opacity: 0.85; }
+
+    /* Summary Card Section */
+    .summary-grid { 
+      display: grid; 
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); 
+      gap: 15px; 
+      margin-bottom: 25px; 
+    }
+    .summary-card { 
+      background: white; 
+      border-radius: 16px; 
+      padding: 20px; 
+      box-shadow: 0 4px 12px rgba(0,0,0,0.05); 
+      border-top: 4px solid var(--accent); 
+    }
+    .summary-card.revenue { border-top-color: #2e7d32; background: linear-gradient(135deg, #ffffff 0%, #f1f8e9 100%); }
+    .summary-card h3 { font-size: 0.9rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+    .summary-value { font-size: 2.1rem; font-weight: 800; color: var(--header); }
 
     .dashboard-section { background: white; border-radius: 16px; padding: 20px; margin-bottom: 25px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
-
-    .table-container { width: 100%; overflow-x: auto; border-radius: 12px; max-height: 400px; overflow-y: auto; }
-    table { width: 100%; border-collapse: collapse; min-width: 600px; font-size: 0.9rem; }
-    th { background: var(--header); color: white; text-align: left; padding: 14px; position: sticky; top: 0; z-index: 10; }
-    td { padding: 14px; border-bottom: 1px solid #e2e8f0; font-weight: 500; }
+    .section-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 15px; }
     
+    .search-input {
+      padding: 8px 14px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      outline: none;
+      width: 250px;
+    }
+    .search-input:focus { border-color: var(--accent); }
+
+    .table-container { width: 100%; overflow-x: auto; border-radius: 12px; max-height: 480px; overflow-y: auto; border: 1px solid #e2e8f0; }
+    table { width: 100%; border-collapse: collapse; min-width: 750px; font-size: 0.9rem; }
+    th { background: var(--header); color: white; text-align: left; padding: 14px; position: sticky; top: 0; z-index: 10; font-weight: 600; }
+    td { padding: 12px 14px; border-bottom: 1px solid #e2e8f0; font-weight: 500; }
+    tr:nth-child(even) { background-color: #f8fafc; }
+    tr:hover { background-color: #f1f5f9; }
+
     tr.critical-row { background-color: #fff5f5; border-left: 4px solid var(--high); }
     .urgency-badge { padding: 4px 10px; border-radius: 20px; font-weight: 700; font-size: 0.75rem; text-transform: uppercase; }
     .urgency-high { background: #fee2e2; color: #c53030; }
@@ -29,22 +70,40 @@
   <div class="container">
     <header>
       <h1>🍛 KOTAai INGREDIENT INTELLIGENCE</h1>
-      <p>Real-Time Stock Monitoring • Nosty'$ Fresh Fast Food</p>
+      <p>Real-Time Stock & Revenue Monitoring • Nosty'$ Fresh Fast Food</p>
     </header>
+
+    <!-- Summary Metrics Card -->
+    <div class="summary-grid">
+      <div class="summary-card revenue">
+        <h3>💰 Projected Daily Revenue</h3>
+        <div class="summary-value" id="total-revenue-card">R 0.00</div>
+      </div>
+      <div class="summary-card">
+        <h3>📦 Total Forecasted Daily Meals</h3>
+        <div class="summary-value" id="total-meals-card">0 units</div>
+      </div>
+    </div>
 
     <!-- Meal Sales Forecast Table Section -->
     <div class="dashboard-section">
-      <h3>📊 Daily Meal Sales Forecast</h3>
-      <div class="table-container" style="margin-top: 15px;">
+      <div class="section-header">
+        <h3>📊 Daily Meal Sales & Revenue Forecast</h3>
+        <input type="text" id="meal-search" class="search-input" placeholder="Search meal or category..." onkeyup="filterMealTable()" />
+      </div>
+      <div class="table-container">
         <table>
           <thead>
             <tr>
               <th>Meal Name</th>
+              <th>Category</th>
+              <th>Price (ZAR)</th>
               <th>Expected Sales (Units)</th>
+              <th>Projected Total (ZAR)</th>
             </tr>
           </thead>
           <tbody id="meal-forecast-body">
-            <tr><td colspan="2" style="text-align:center;">Loading meal forecasts...</td></tr>
+            <tr><td colspan="5" style="text-align:center;">Loading meal forecasts...</td></tr>
           </tbody>
         </table>
       </div>
@@ -52,7 +111,9 @@
 
     <!-- Live Inventory Table Section -->
     <div class="dashboard-section">
-      <h3>📋 Live Inventory Dashboard</h3>
+      <div class="section-header">
+        <h3>📋 Live Inventory Dashboard</h3>
+      </div>
       <div class="table-container">
         <table>
           <thead>
@@ -76,21 +137,99 @@
   </div>
 
   <script>
+    // Complete Menu Master Table (47 Items)
+    const MENU_MASTER = {
+      "Chips Large": { category: "Chips", price: 40.00 },
+      "Chips Medium": { category: "Chips", price: 25.00 },
+      "Chips Extra Large": { category: "Chips", price: 60.00 },
+      "Chips Small": { category: "Chips", price: 15.00 },
+      "Combo 35": { category: "Combo Menu", price: 35.00 },
+      "Combo 15": { category: "Combo Menu", price: 15.00 },
+      "Combo 45": { category: "Combo Menu", price: 45.00 },
+      "Combo 25": { category: "Combo Menu", price: 25.00 },
+      "Combo 10": { category: "Combo Menu", price: 10.00 },
+      "Combo 13": { category: "Combo Menu", price: 13.00 },
+      "Turbo Dagwood": { category: "Dagwoods", price: 80.00 },
+      "Matlosana Dagwood": { category: "Dagwoods", price: 120.00 },
+      "Mofarasai Dagwood": { category: "Dagwoods", price: 75.00 },
+      "Original Dagwood": { category: "Dagwoods", price: 60.00 },
+      "Tower of Terror": { category: "Kota Menu", price: 120.00 },
+      "La Hof": { category: "Kota Menu", price: 85.00 },
+      "Ext 10": { category: "Kota Menu", price: 20.00 },
+      "Cheesy D": { category: "Kota Menu", price: 70.00 },
+      "Ext 6": { category: "Kota Menu", price: 75.00 },
+      "Stop 1": { category: "Kota Menu", price: 25.00 },
+      "Stop 5_1": { category: "Kota Menu", price: 30.00 },
+      "Stop 5+": { category: "Kota Menu", price: 35.00 },
+      "Bosrand": { category: "Kota Menu", price: 40.00 },
+      "Sun City": { category: "Kota Menu", price: 45.00 },
+      "Phelandaba": { category: "Kota Menu", price: 45.00 },
+      "Down": { category: "Kota Menu", price: 45.00 },
+      "Di_Z_Kota": { category: "Kota Menu", price: 55.00 },
+      "J_town": { category: "Kota Menu", price: 65.00 },
+      "Flamwood": { category: "Kota Menu", price: 75.00 },
+      "BBL Tower of Terror": { category: "Kota Menu", price: 140.00 },
+      "Laprovance": { category: "Kota Menu", price: 199.00 },
+      "Stop 18": { category: "Kota Menu", price: 40.00 },
+      "Dark City": { category: "Kota Menu", price: 50.00 },
+      "Di_Y_Kota": { category: "Kota Menu", price: 60.00 },
+      "N12_4": { category: "Loafs", price: 199.00 },
+      "N12_3": { category: "Loafs", price: 140.00 },
+      "N12_1": { category: "Loafs", price: 80.00 },
+      "N12_2": { category: "Loafs", price: 99.00 },
+      "Frankfurter Short": { category: "Tops", price: 18.00 },
+      "Continental Russian Long": { category: "Tops", price: 25.00 },
+      "Continental Russian Short": { category: "Tops", price: 18.00 },
+      "Extra Sauce": { category: "Tops", price: 3.00 },
+      "Atchar": { category: "Tops", price: 5.00 },
+      "Egg": { category: "Tops", price: 5.00 },
+      "Special Garlic": { category: "Tops", price: 5.00 },
+      "Burger": { category: "Tops", price: 12.00 },
+      "Vienna": { category: "Tops", price: 8.00 },
+      "Cheese": { category: "Tops", price: 5.00 },
+      "Liver": { category: "Tops", price: 5.00 },
+      "Cheese Russian Long": { category: "Tops", price: 30.00 },
+      "Cheese Russian Short": { category: "Tops", price: 22.00 },
+      "Frankfurter Long": { category: "Tops", price: 25.00 }
+    };
+
+    let allMealDataRows = [];
+
     async function fetchData() {
       try {
-        // 1. Forecast Table
+        // 1. Fetch Forecast Data
         const mRes = await fetch('/api/forecast-meals', { method: 'POST' });
         const mData = await mRes.json();
         
-        const mealTbody = document.getElementById('meal-forecast-body');
-        mealTbody.innerHTML = Object.entries(mData).map(([meal, forecast]) => `
-          <tr>
-            <td><strong>${meal}</strong></td>
-            <td>${forecast}</td>
-          </tr>
-        `).join('');
+        let grandTotalRevenue = 0;
+        let grandTotalMeals = 0;
+        allMealDataRows = [];
 
-        // 2. Full Inventory Table
+        // Build list with all menu items (defaulting forecast to 0 if API hasn't returned a specific item)
+        Object.keys(MENU_MASTER).forEach(mealName => {
+          const itemMeta = MENU_MASTER[mealName];
+          const forecastQty = mData[mealName] || 0;
+          const totalLineRevenue = forecastQty * itemMeta.price;
+
+          grandTotalRevenue += totalLineRevenue;
+          grandTotalMeals += forecastQty;
+
+          allMealDataRows.push({
+            name: mealName,
+            category: itemMeta.category,
+            price: itemMeta.price,
+            forecast: forecastQty,
+            totalRevenue: totalLineRevenue
+          });
+        });
+
+        // Update Summary Cards
+        document.getElementById('total-revenue-card').textContent = `R ${grandTotalRevenue.toLocaleString('en-ZA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        document.getElementById('total-meals-card').textContent = `${grandTotalMeals} units`;
+
+        renderMealTable(allMealDataRows);
+
+        // 2. Fetch Full Inventory Table
         const ingredients = [
           "Atchar", "Bacon", "Boere Wors", "Burger", "Rib Burger", "Cheese", 
           "Russian", "Cheesy Russian", "Chicken Russian", "Chicken Stripes", "Chips", 
@@ -123,8 +262,34 @@
       } catch (err) { console.error("Sync Error:", err); }
     }
 
+    function renderMealTable(items) {
+      const mealTbody = document.getElementById('meal-forecast-body');
+      if (items.length === 0) {
+        mealTbody.innerHTML = `<tr><td colspan="5" style="text-align:center;">No matching meals found.</td></tr>`;
+        return;
+      }
+
+      mealTbody.innerHTML = items.map(m => `
+        <tr>
+          <td><strong>${m.name}</strong></td>
+          <td><span style="background: #e2e8f0; padding: 3px 8px; border-radius: 6px; font-size: 0.8rem;">${m.category}</span></td>
+          <td>R ${m.price.toFixed(2)}</td>
+          <td><strong>${m.forecast}</strong></td>
+          <td style="color: #2e7d32; font-weight: 700;">R ${m.totalRevenue.toFixed(2)}</td>
+        </tr>
+      `).join('');
+    }
+
+    function filterMealTable() {
+      const q = document.getElementById('meal-search').value.toLowerCase();
+      const filtered = allMealDataRows.filter(m => 
+        m.name.toLowerCase().includes(q) || m.category.toLowerCase().includes(q)
+      );
+      renderMealTable(filtered);
+    }
+
     fetchData();
     setInterval(fetchData, 300000);
   </script>
 </body>
-</html>
+                           </html>
