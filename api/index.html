@@ -11,14 +11,9 @@
     body { font-family: 'Segoe UI', sans-serif; background: #f0f4f8; padding: 15px; overflow-x: hidden; }
     .container { max-width: 1200px; margin: 0 auto; }
     header { background: var(--header); color: white; padding: 1.5rem; border-radius: 16px; margin-bottom: 20px; text-align: center; }
-    
-    .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 25px; }
-    .summary-card { background: white; border-radius: 16px; padding: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); border-top: 4px solid var(--low); }
-    .summary-card.critical { border-top-color: var(--high); }
-    .summary-value { font-size: 1.8rem; font-weight: 800; color: var(--header); }
 
     .dashboard-section { background: white; border-radius: 16px; padding: 20px; margin-bottom: 25px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
-    .chart-container { height: 300px; margin-bottom: 20px; }
+    .chart-container { height: 420px; margin-bottom: 20px; }
 
     .table-container { width: 100%; overflow-x: auto; border-radius: 12px; }
     table { width: 100%; border-collapse: collapse; min-width: 900px; font-size: 0.9rem; }
@@ -38,25 +33,6 @@
       <h1>🍛 KOTAai INGREDIENT INTELLIGENCE</h1>
       <p>Real-Time Stock Monitoring • Nosty'$ Fresh Fast Food</p>
     </header>
-
-    <div class="summary-grid">
-      <div class="summary-card">
-        <h3>📦 Ingredients</h3>
-        <div class="summary-value" id="total-items">-</div>
-      </div>
-      <div class="summary-card critical">
-        <h3>🚨 Critical</h3>
-        <div class="summary-value" id="critical-items">-</div>
-      </div>
-      <div class="summary-card">
-        <h3>🛒 Reorder Total</h3>
-        <div class="summary-value" id="total-recommended">-</div>
-      </div>
-      <div class="summary-card">
-        <h3>⏱️ Last Sync</h3>
-        <div class="summary-value" id="last-update">-</div>
-      </div>
-    </div>
 
     <div class="dashboard-section">
       <h3>📈 Daily Meal Sales Forecast</h3>
@@ -103,7 +79,19 @@
             labels: Object.keys(mData),
             datasets: [{ label: 'Expected Sales', data: Object.values(mData), backgroundColor: '#3182ce', borderRadius: 5 }]
           },
-          options: { responsive: true, maintainAspectRatio: false }
+          options: { 
+            responsive: true, 
+            maintainAspectRatio: false,
+            scales: {
+              x: {
+                ticks: {
+                  autoSkip: false,   // Prevents Chart.js from skipping meal labels
+                  maxRotation: 90,   // Rotates labels vertically if space is tight
+                  minRotation: 45
+                }
+              }
+            }
+          }
         });
 
         // 2. Full Inventory Table
@@ -121,11 +109,6 @@
           body: JSON.stringify({ items: ingredients.map(n => ({ item_name: n })) })
         });
         const d = await dRes.json();
-
-        document.getElementById('total-items').textContent = d.summary.total_items;
-        document.getElementById('critical-items').textContent = d.summary.critical_items;
-        document.getElementById('total-recommended').textContent = d.summary.total_recommended;
-        document.getElementById('last-update').textContent = d.summary.timestamp.split(' ')[1];
 
         const tbody = document.getElementById('table-body');
         tbody.innerHTML = d.items.map(i => `
