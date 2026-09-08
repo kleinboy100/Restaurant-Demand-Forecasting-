@@ -3,7 +3,7 @@ import logging
 import math
 import re
 from datetime import datetime
-from typing import Optional, List, Dict, Union
+from typing import Optional, List, Dict
 
 import numpy as np
 import pandas as pd
@@ -18,7 +18,7 @@ import requests
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="KOTAai Ingredient Intelligence", version="5.4.0")
+app = FastAPI(title="KOTAai Ingredient Intelligence", version="5.5.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -51,21 +51,54 @@ class DashboardRequest(BaseModel):
 class MealForecastRequest(BaseModel):
     meals: Optional[List[str]] = None
 
-# Complete Bill of Materials (BOM)
+# Complete Bill of Materials (BOM) including Meals, Combos, Chips, Loafs, and Tops
 RECIPES: Dict[str, Dict[str, float]] = {
-    "BBL Tower of Terror": {"Bacon": 1.0, "Bread": 0.25, "Cheese": 1.0, "Chips": 0.2, "Egg": 1.0, "Frankfurter": 1.0, "Lettuce": 0.005, "Polony": 0.0025, "Rib Burger": 1.0, "Russian": 1.0, "Secret Sauce": 0.0005, "Vienna": 1.0},
-    "Bosrand": {"Bread": 0.25, "Cheese": 1.0, "Chips": 0.4, "Egg": 1.0, "Lettuce": 0.005, "Polony": 0.00025, "Secret Sauce": 0.005, "Unico Russian": 1.0},
-    "Cheesy D": {"Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 0.2, "Egg": 1.0, "Lettuce": 0.005, "Secret Sauce": 0.025, "Unico Russian": 1.0},
+    # --- Tops & Add-ons (Quantity 1.0 per item) ---
+    "Frankfurter Short": {"Frankfurter": 1.0},
+    "Continental Russian Long": {"Russian": 1.0},
+    "Continental Russian Short": {"Russian": 1.0},
+    "Extra Sauce": {"Secret Sauce": 1.0},
+    "Atchar": {"Atchar": 1.0},
+    "Egg": {"Egg": 1.0},
+    "Special Garlic": {"Special Garlic": 1.0},
+    "Burger": {"Burger": 1.0},
+    "Vienna": {"Vienna": 1.0},
+    "Cheese": {"Cheese": 1.0},
+    "Liver": {"Liver": 1.0},
+    "Cheese Russian Long": {"Cheesy Russian": 1.0},
+    "Cheese Russian Short": {"Cheesy Russian": 1.0},
+    "Frankfurter Long": {"Frankfurter": 1.0},
+
+    # --- Chips ---
     "Chips Extra Large": {"Chips": 4.0},
     "Chips Large": {"Chips": 3.0},
     "Chips Medium": {"Chips": 2.0},
     "Chips Small": {"Chips": 1.0},
+
+    # --- Combos ---
     "Combo 10": {"Chips": 0.2, "Magwenya": 3.0},
     "Combo 13": {"Chips": 0.3, "Magwenya": 4.0, "Polony": 0.0025},
     "Combo 15": {"Chips": 0.2, "Magwenya": 5.0, "Polony": 0.025},
     "Combo 25": {"Chips": 0.4, "Magwenya": 6.0, "Polony": 0.0025, "Vienna": 1.0},
     "Combo 35": {"Chips": 0.3, "Magwenya": 6.0, "Polony": 0.025, "Unico Russian": 1.0},
     "Combo 45": {"Atchar": 2.5, "Chips": 1.0, "Liver": 1.0, "Magwenya": 6.0, "Russian": 1.0},
+
+    # --- Dagwoods ---
+    "Matlosana Dagwood": {"Bacon": 1.0, "Bread": 1.0, "Cheese": 2.0, "Cheesy Russian": 1.0, "Club Stake": 1.0, "Egg": 1.0, "Nosty Sauce": 1.0, "Onion": 0.0125, "Tomato": 0.167},
+    "Mofarasai Dagwood": {"Bacon": 1.0, "Bread": 1.0, "Cheese": 2.0, "Cheesy Russian": 1.0, "Egg": 1.0, "Nosty Sauce": 1.0, "Rib Burger": 1.0, "Tomato": 0.167},
+    "Original Dagwood": {"Bacon": 1.0, "Bread": 1.0, "Burger": 1.0, "Cheese": 1.0, "Egg": 1.0, "Nosty Sauce": 1.0, "Russian": 1.0, "Tomato": 0.167},
+    "Turbo Dagwood": {"Bread": 1.0, "Cheese": 1.0, "Chicken Russian": 1.0, "Egg": 1.0, "Nosty Sauce": 1.0, "Rib Burger": 1.0, "Tomato": 0.167},
+
+    # --- Loafs ---
+    "N12_1": {"Bread": 1.0, "Cheese": 2.0, "Chips": 1.0, "Egg": 2.0, "Loaf": 0.25, "Nosty Sauce": 1.0, "Polony": 0.1, "Russian": 1.0, "Vienna": 1.0},
+    "N12_2": {"Bread": 1.0, "Burger": 1.0, "Cheese": 2.0, "Chips": 1.0, "Egg": 2.0, "Loaf": 0.25, "Nosty Sauce": 1.0, "Polony": 0.15, "Russian": 1.0, "Vienna": 1.0},
+    "N12_3": {"Bacon": 1.0, "Bread": 1.0, "Burger": 2.0, "Cheese": 3.0, "Chips": 2.0, "Egg": 3.0, "Loaf": 0.25, "Nosty Sauce": 1.0, "Polony": 0.2, "Russian": 2.0, "Vienna": 2.0},
+    "N12_4": {"Bacon": 2.0, "Bread": 1.0, "Burger": 2.0, "Cheese": 4.0, "Chips": 2.0, "Egg": 4.0, "Loaf": 0.25, "Nosty Sauce": 1.0, "Polony": 0.25, "Russian": 3.0, "Vienna": 3.0},
+
+    # --- Kota Menu ---
+    "BBL Tower of Terror": {"Bacon": 1.0, "Bread": 0.25, "Cheese": 1.0, "Chips": 0.2, "Egg": 1.0, "Frankfurter": 1.0, "Lettuce": 0.005, "Polony": 0.0025, "Rib Burger": 1.0, "Russian": 1.0, "Secret Sauce": 0.0005, "Vienna": 1.0},
+    "Bosrand": {"Bread": 0.25, "Cheese": 1.0, "Chips": 0.4, "Egg": 1.0, "Lettuce": 0.005, "Polony": 0.00025, "Secret Sauce": 0.005, "Unico Russian": 1.0},
+    "Cheesy D": {"Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 0.2, "Egg": 1.0, "Lettuce": 0.005, "Secret Sauce": 0.025, "Unico Russian": 1.0},
     "Curry Fish Kota": {"Atchar": 1.0, "Bread": 0.25, "Curry Fish": 1.0},
     "Dark City": {"Bread": 0.25, "Cheese": 1.0, "Cheesy Russian": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Secret Sauce": 1.0},
     "Di_Y_Kota": {"Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Ham": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Secret Sauce": 1.0},
@@ -77,22 +110,14 @@ RECIPES: Dict[str, Dict[str, float]] = {
     "J_town": {"Atchar": 1.0, "Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Secret Sauce": 1.0, "Tomato": 0.167},
     "La Hof": {"Bacon": 1.0, "Bread": 0.25, "Cheesy Russian": 1.0, "Chicken Stripes": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Secret Sauce": 1.0},
     "Laprovance": {"Bacon": 1.0, "Boere Wors": 1.0, "Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Club Stake": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Onion": 0.0125, "Polony": 0.025, "Russian": 1.0, "Secret Sauce": 1.0},
-    "Matlosana Dagwood": {"Bacon": 1.0, "Bread": 1.0, "Cheese": 2.0, "Cheesy Russian": 1.0, "Club Stake": 1.0, "Egg": 1.0, "Nosty Sauce": 1.0, "Onion": 0.0125, "Tomato": 0.167},
     "Mince Kota": {"Atchar": 1.0, "Bread": 0.25, "Mince": 1.0},
-    "Mofarasai Dagwood": {"Bacon": 1.0, "Bread": 1.0, "Cheese": 2.0, "Cheesy Russian": 1.0, "Egg": 1.0, "Nosty Sauce": 1.0, "Rib Burger": 1.0, "Tomato": 0.167},
-    "N12_1": {"Bread": 1.0, "Cheese": 2.0, "Chips": 1.0, "Egg": 2.0, "Loaf": 0.25, "Nosty Sauce": 1.0, "Polony": 0.1, "Russian": 1.0, "Vienna": 1.0},
-    "N12_2": {"Bread": 1.0, "Burger": 1.0, "Cheese": 2.0, "Chips": 1.0, "Egg": 2.0, "Loaf": 0.25, "Nosty Sauce": 1.0, "Polony": 0.15, "Russian": 1.0, "Vienna": 1.0},
-    "N12_3": {"Bacon": 1.0, "Bread": 1.0, "Burger": 2.0, "Cheese": 3.0, "Chips": 2.0, "Egg": 3.0, "Loaf": 0.25, "Nosty Sauce": 1.0, "Polony": 0.2, "Russian": 2.0, "Vienna": 2.0},
-    "N12_4": {"Bacon": 2.0, "Bread": 1.0, "Burger": 2.0, "Cheese": 4.0, "Chips": 2.0, "Egg": 4.0, "Loaf": 0.25, "Nosty Sauce": 1.0, "Polony": 0.25, "Russian": 3.0, "Vienna": 3.0},
-    "Original Dagwood": {"Bacon": 1.0, "Bread": 1.0, "Burger": 1.0, "Cheese": 1.0, "Egg": 1.0, "Nosty Sauce": 1.0, "Russian": 1.0, "Tomato": 0.167},
     "Phelandaba": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Secret Sauce": 1.0},
     "Stop 1": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Polony": 0.025, "Secret Sauce": 1.0},
     "Stop 18": {"Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Polony": 0.025, "Russian": 1.0, "Secret Sauce": 1.0},
     "Stop 5_1": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Secret Sauce": 1.0, "Vienna": 1.0},
     "Stop 5+": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Ham": 1.0, "Lettuce": 1.0, "Secret Sauce": 1.0, "Vienna": 1.0},
     "Sun City": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Frankfurter": 1.0, "Lettuce": 1.0, "Secret Sauce": 1.0},
-    "Tower of Terror": {"Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Frankfurter": 1.0, "Lettuce": 1.0, "Polony": 0.025, "Russian": 1.0, "Secret Sauce": 1.0},
-    "Turbo Dagwood": {"Bread": 1.0, "Cheese": 1.0, "Chicken Russian": 1.0, "Egg": 1.0, "Nosty Sauce": 1.0, "Rib Burger": 1.0, "Tomato": 0.167}
+    "Tower of Terror": {"Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Frankfurter": 1.0, "Lettuce": 1.0, "Polony": 0.025, "Russian": 1.0, "Secret Sauce": 1.0}
 }
 
 def clean_name(term: str) -> str:
@@ -121,7 +146,6 @@ def fetch_continuous_sales_df(item_name: str, lookback_days: int = 30) -> pd.Dat
         return default_df
 
     try:
-        # Flexible query using clean token match
         search_token = item_name.split()[0] if item_name.split() else item_name
         res = supabase.table("order_items").select("*").ilike("item_name", f"%{search_token}%").execute()
         
@@ -130,13 +154,12 @@ def fetch_continuous_sales_df(item_name: str, lookback_days: int = 30) -> pd.Dat
 
         df_items = pd.DataFrame(res.data)
 
-        # Filter in Python using clean fuzzy matching
         target_clean = clean_name(item_name)
         df_items["clean_name"] = df_items["item_name"].astype(str).apply(clean_name)
         df_matched = df_items[df_items["clean_name"].str.contains(target_clean, na=False) | df_items["clean_name"].apply(lambda x: target_clean in x)]
 
         if df_matched.empty:
-            df_matched = df_items  # Fallback to broader match if specific match is empty
+            return default_df
 
         if "created_at" in df_matched.columns:
             df_matched["ds"] = pd.to_datetime(df_matched["created_at"]).dt.tz_localize(None).dt.floor('D')
@@ -163,20 +186,23 @@ def fetch_continuous_sales_df(item_name: str, lookback_days: int = 30) -> pd.Dat
         return default_df
 
 def run_safe_forecast(name: str, days: int = 1) -> float:
+    """
+    Computes exact historical daily forecast.
+    Returns 0.0 if there are no historical sales recorded.
+    """
     df = fetch_continuous_sales_df(name, lookback_days=30)
     total_sales = df["y"].sum()
 
-    # Dynamic fallback baseline if no sales recorded in Supabase (1.0 - 3.0 units)
+    # Accurate Fallback: If no sales recorded, demand is 0.0
     if total_sales == 0:
-        return float(days * 1.5)
+        return 0.0
 
     recent_7d = df.tail(7)["y"].mean()
     recent_30d = df["y"].mean()
     nonzero_days = (df["y"] > 0).sum()
 
-    if nonzero_days < 5:
-        avg_daily = max(recent_30d, recent_7d, 1.0)
-        return float(avg_daily * days)
+    if nonzero_days < 3:
+        return float(recent_30d * days)
 
     try:
         m = Prophet(yearly_seasonality=False, weekly_seasonality=True, daily_seasonality=False)
@@ -187,15 +213,13 @@ def run_safe_forecast(name: str, days: int = 1) -> float:
         future_yhat = forecast.tail(days)["yhat"].clip(lower=0.0)
         predicted = float(future_yhat.sum())
 
-        return max(predicted, float(recent_7d * days), 1.0)
+        return max(0.0, predicted)
     except Exception as e:
         logger.error(f"Prophet Exception [{name}]: {e}")
-        return max(float(recent_30d * days), 1.0)
+        return max(0.0, float(recent_30d * days))
 
 @app.post("/api/forecast-meals")
 async def forecast_meals(req: Optional[MealForecastRequest] = None):
-    # If the request provides a specific list of meals from the UI table, use it.
-    # Otherwise, calculate for ALL known menu items in RECIPES!
     if req and req.meals and len(req.meals) > 0:
         target_meals = req.meals
     else:
@@ -208,8 +232,8 @@ async def forecast_meals(req: Optional[MealForecastRequest] = None):
         predicted_daily = run_safe_forecast(meal, days=1)
         adjusted_val = predicted_daily * impact
         
-        # Guarantees a minimum non-zero realistic forecast for all active menu items
-        results[meal] = max(1, math.ceil(adjusted_val))
+        # Round to nearest integer (returns 0 if model predicts 0 or below 0.5)
+        results[meal] = int(round(adjusted_val))
 
     return results
 
@@ -230,7 +254,7 @@ async def dashboard(req: DashboardRequest):
             except Exception as e:
                 logger.error(f"Stock fetch error [{name}]: {e}")
 
-        # Weekly ingredient requirement
+        # Weekly ingredient requirement based on true forecast
         weekly_demand = 0.0
         clean_target = clean_name(name)
         for meal_name, recipe in RECIPES.items():
@@ -240,6 +264,7 @@ async def dashboard(req: DashboardRequest):
                     weekly_demand += (meal_forecast * qty)
                     break
 
+        # Fallback to direct ingredient history (defaults to 0.0 if not sold)
         if weekly_demand == 0.0:
             weekly_demand = run_safe_forecast(name, days=7)
 
