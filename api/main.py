@@ -2,14 +2,14 @@ import os
 import logging
 import math
 import re
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from typing import Optional, List, Dict
 
 import numpy as np
 import pandas as pd
 from prophet import Prophet
 from pydantic import BaseModel
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from supabase import create_client, Client
@@ -18,7 +18,7 @@ import requests
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="KOTAai Ingredient Intelligence", version="5.5.0")
+app = FastAPI(title="KOTAai Ingredient Intelligence", version="6.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -47,17 +47,18 @@ class DashboardItem(BaseModel):
 
 class DashboardRequest(BaseModel):
     items: List[DashboardItem]
+    target_date: Optional[str] = None
 
 class MealForecastRequest(BaseModel):
     meals: Optional[List[str]] = None
+    target_date: Optional[str] = None
 
-# Complete Bill of Materials (BOM) including Meals, Combos, Chips, Loafs, and Tops
 RECIPES: Dict[str, Dict[str, float]] = {
-    # --- Tops & Add-ons (Quantity 1.0 per item) ---
+    # --- Tops & Add-ons ---
     "Frankfurter Short": {"Frankfurter": 1.0},
     "Continental Russian Long": {"Russian": 1.0},
     "Continental Russian Short": {"Russian": 1.0},
-    "Extra Sauce": {"Secret Sauce": 1.0},
+    "Extra Sauce": {"Nosty Sauce": 1.0},
     "Atchar": {"Atchar": 1.0},
     "Egg": {"Egg": 1.0},
     "Special Garlic": {"Special Garlic": 1.0},
@@ -80,7 +81,7 @@ RECIPES: Dict[str, Dict[str, float]] = {
     "Combo 13": {"Chips": 0.3, "Magwenya": 4.0, "Polony": 0.0025},
     "Combo 15": {"Chips": 0.2, "Magwenya": 5.0, "Polony": 0.025},
     "Combo 25": {"Chips": 0.4, "Magwenya": 6.0, "Polony": 0.0025, "Vienna": 1.0},
-    "Combo 35": {"Chips": 0.3, "Magwenya": 6.0, "Polony": 0.025, "Unico Russian": 1.0},
+    "Combo 35": {"Chips": 0.3, "Magwenya": 6.0, "Polony": 0.025, "Russian": 1.0},
     "Combo 45": {"Atchar": 2.5, "Chips": 1.0, "Liver": 1.0, "Magwenya": 6.0, "Russian": 1.0},
 
     # --- Dagwoods ---
@@ -96,50 +97,70 @@ RECIPES: Dict[str, Dict[str, float]] = {
     "N12_4": {"Bacon": 2.0, "Bread": 1.0, "Burger": 2.0, "Cheese": 4.0, "Chips": 2.0, "Egg": 4.0, "Loaf": 0.25, "Nosty Sauce": 1.0, "Polony": 0.25, "Russian": 3.0, "Vienna": 3.0},
 
     # --- Kota Menu ---
-    "BBL Tower of Terror": {"Bacon": 1.0, "Bread": 0.25, "Cheese": 1.0, "Chips": 0.2, "Egg": 1.0, "Frankfurter": 1.0, "Lettuce": 0.005, "Polony": 0.0025, "Rib Burger": 1.0, "Russian": 1.0, "Secret Sauce": 0.0005, "Vienna": 1.0},
-    "Bosrand": {"Bread": 0.25, "Cheese": 1.0, "Chips": 0.4, "Egg": 1.0, "Lettuce": 0.005, "Polony": 0.00025, "Secret Sauce": 0.005, "Unico Russian": 1.0},
-    "Cheesy D": {"Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 0.2, "Egg": 1.0, "Lettuce": 0.005, "Secret Sauce": 0.025, "Unico Russian": 1.0},
+    "BBL Tower of Terror": {"Bacon": 1.0, "Bread": 0.25, "Cheese": 1.0, "Chips": 0.2, "Egg": 1.0, "Frankfurter": 1.0, "Lettuce": 0.005, "Polony": 0.0025, "Rib Burger": 1.0, "Russian": 1.0, "Nosty Sauce": 0.0005, "Vienna": 1.0},
+    "Bosrand": {"Bread": 0.25, "Cheese": 1.0, "Chips": 0.4, "Egg": 1.0, "Lettuce": 0.005, "Polony": 0.00025, "Nosty Sauce": 0.005, "Russian": 1.0},
+    "Cheesy D": {"Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 0.2, "Egg": 1.0, "Lettuce": 0.005, "Nosty Sauce": 0.025, "Russian": 1.0},
     "Curry Fish Kota": {"Atchar": 1.0, "Bread": 0.25, "Curry Fish": 1.0},
-    "Dark City": {"Bread": 0.25, "Cheese": 1.0, "Cheesy Russian": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Secret Sauce": 1.0},
-    "Di_Y_Kota": {"Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Ham": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Secret Sauce": 1.0},
-    "Di_Z_Kota": {"Bread": 0.25, "Cheese": 1.0, "Cheesy Russian": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Secret Sauce": 1.0},
-    "Down": {"Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Secret Sauce": 1.0},
+    "Dark City": {"Bread": 0.25, "Cheese": 1.0, "Cheesy Russian": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Nosty Sauce": 1.0},
+    "Di_Y_Kota": {"Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Ham": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Nosty Sauce": 1.0},
+    "Di_Z_Kota": {"Bread": 0.25, "Cheese": 1.0, "Cheesy Russian": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Nosty Sauce": 1.0},
+    "Down": {"Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Nosty Sauce": 1.0},
     "Ext 10": {"Bread": 0.25, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Nosty Sauce": 1.0, "Polony": 0.025},
-    "Ext 6": {"Bacon": 1.0, "Bread": 0.25, "Chips": 1.0, "Egg": 1.0, "Fish Fillet": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Secret Sauce": 1.0},
-    "Flamwood": {"Bacon": 1.0, "Bread": 0.25, "Cheese": 1.0, "Chicken Stripes": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Secret Sauce": 1.0},
-    "J_town": {"Atchar": 1.0, "Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Secret Sauce": 1.0, "Tomato": 0.167},
-    "La Hof": {"Bacon": 1.0, "Bread": 0.25, "Cheesy Russian": 1.0, "Chicken Stripes": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Secret Sauce": 1.0},
-    "Laprovance": {"Bacon": 1.0, "Boere Wors": 1.0, "Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Club Stake": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Onion": 0.0125, "Polony": 0.025, "Russian": 1.0, "Secret Sauce": 1.0},
+    "Ext 6": {"Bacon": 1.0, "Bread": 0.25, "Chips": 1.0, "Egg": 1.0, "Fish Fillet": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Nosty Sauce": 1.0},
+    "Flamwood": {"Bacon": 1.0, "Bread": 0.25, "Cheese": 1.0, "Chicken Stripes": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Nosty Sauce": 1.0},
+    "J_town": {"Atchar": 1.0, "Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Nosty Sauce": 1.0, "Tomato": 0.167},
+    "La Hof": {"Bacon": 1.0, "Bread": 0.25, "Cheesy Russian": 1.0, "Chicken Stripes": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Nosty Sauce": 1.0},
+    "Laprovance": {"Bacon": 1.0, "Boere Wors": 1.0, "Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Club Stake": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Onion": 0.0125, "Polony": 0.025, "Russian": 1.0, "Nosty Sauce": 1.0},
     "Mince Kota": {"Atchar": 1.0, "Bread": 0.25, "Mince": 1.0},
-    "Phelandaba": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Secret Sauce": 1.0},
-    "Stop 1": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Polony": 0.025, "Secret Sauce": 1.0},
-    "Stop 18": {"Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Polony": 0.025, "Russian": 1.0, "Secret Sauce": 1.0},
-    "Stop 5_1": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Secret Sauce": 1.0, "Vienna": 1.0},
-    "Stop 5+": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Ham": 1.0, "Lettuce": 1.0, "Secret Sauce": 1.0, "Vienna": 1.0},
-    "Sun City": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Frankfurter": 1.0, "Lettuce": 1.0, "Secret Sauce": 1.0},
-    "Tower of Terror": {"Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Frankfurter": 1.0, "Lettuce": 1.0, "Polony": 0.025, "Russian": 1.0, "Secret Sauce": 1.0}
+    "Phelandaba": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Nosty Sauce": 1.0},
+    "Stop 1": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Polony": 0.025, "Nosty Sauce": 1.0},
+    "Stop 18": {"Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Polony": 0.025, "Russian": 1.0, "Nosty Sauce": 1.0},
+    "Stop 5_1": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Nosty Sauce": 1.0, "Vienna": 1.0},
+    "Stop 5+": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Ham": 1.0, "Lettuce": 1.0, "Nosty Sauce": 1.0, "Vienna": 1.0},
+    "Sun City": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Frankfurter": 1.0, "Lettuce": 1.0, "Nosty Sauce": 1.0},
+    "Tower of Terror": {"Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Frankfurter": 1.0, "Lettuce": 1.0, "Polony": 0.025, "Russian": 1.0, "Nosty Sauce": 1.0}
+}
+
+MENU_MASTER_PRICES = {
+    "Chips Large": 40.00, "Chips Medium": 25.00, "Chips Extra Large": 60.00, "Chips Small": 15.00,
+    "Combo 35": 35.00, "Combo 15": 15.00, "Combo 45": 45.00, "Combo 25": 25.00, "Combo 10": 10.00, "Combo 13": 13.00,
+    "Turbo Dagwood": 80.00, "Matlosana Dagwood": 120.00, "Mofarasai Dagwood": 75.00, "Original Dagwood": 60.00,
+    "Tower of Terror": 120.00, "La Hof": 85.00, "Ext 10": 20.00, "Cheesy D": 70.00, "Ext 6": 75.00,
+    "Stop 1": 25.00, "Stop 5_1": 30.00, "Stop 5+": 35.00, "Bosrand": 40.00, "Sun City": 45.00,
+    "Phelandaba": 45.00, "Down": 45.00, "Di_Z_Kota": 55.00, "J_town": 65.00, "Flamwood": 75.00,
+    "BBL Tower of Terror": 140.00, "Laprovance": 199.00, "Stop 18": 40.00, "Dark City": 50.00, "Di_Y_Kota": 60.00,
+    "N12_4": 199.00, "N12_3": 140.00, "N12_1": 80.00, "N12_2": 99.00, "Frankfurter Short": 18.00,
+    "Continental Russian Long": 25.00, "Continental Russian Short": 18.00, "Extra Sauce": 3.00,
+    "Atchar": 5.00, "Egg": 5.00, "Special Garlic": 5.00, "Burger": 12.00, "Vienna": 8.00, "Cheese": 5.00,
+    "Liver": 5.00, "Cheese Russian Long": 30.00, "Cheese Russian Short": 22.00, "Frankfurter Long": 25.00
 }
 
 def clean_name(term: str) -> str:
-    """Standardizes names by stripping symbols for fuzzy matching."""
     return re.sub(r'[^a-zA-Z0-9]', '', term).lower()
 
-def get_weather_impact() -> float:
+def get_unbiased_weather_factor() -> float:
+    """
+    Unbiased Weather Model:
+    Fair/Sunny weather retains 100% (1.0) baseline expectation.
+    Subtle rain probability dampens sales proportionally without inflating zero-rain forecasts.
+    """
     try:
         r = requests.get(
             "https://api.open-meteo.com/v1/forecast?latitude=-26.85&longitude=26.66&daily=precipitation_probability_max&forecast_days=1&timezone=Africa/Johannesburg", 
             timeout=3
         )
-        prob = r.json()["daily"]["precipitation_probability_max"][0]
-        return 0.75 if prob > 50 else 1.0
+        prob = float(r.json()["daily"]["precipitation_probability_max"][0])
+        if prob <= 20.0:
+            return 1.0  # Unbiased 1.0 multiplier for clear/dry days
+        # Gradual dampening factor between 0.82 and 1.0 during heavy rain
+        return float(max(0.80, 1.0 - (prob - 20.0) * 0.0025))
     except Exception as e:
         logger.warning(f"Weather API unavailable: {e}")
         return 1.0
 
-def fetch_continuous_sales_df(item_name: str, lookback_days: int = 30) -> pd.DataFrame:
-    today = pd.Timestamp.now().floor('D')
-    start_date = today - pd.Timedelta(days=lookback_days - 1)
-    full_date_range = pd.date_range(start=start_date, end=today, freq='D')
+def fetch_continuous_sales_df(item_name: str, target_end_date: pd.Timestamp, lookback_days: int = 30) -> pd.DataFrame:
+    start_date = target_end_date - pd.Timedelta(days=lookback_days - 1)
+    full_date_range = pd.date_range(start=start_date, end=target_end_date, freq='D')
     default_df = pd.DataFrame({"ds": full_date_range, "y": 0.0})
 
     if not supabase:
@@ -185,19 +206,13 @@ def fetch_continuous_sales_df(item_name: str, lookback_days: int = 30) -> pd.Dat
         logger.error(f"Data Fetch Error [{item_name}]: {e}")
         return default_df
 
-def run_safe_forecast(name: str, days: int = 1) -> float:
-    """
-    Computes exact historical daily forecast.
-    Returns 0.0 if there are no historical sales recorded.
-    """
-    df = fetch_continuous_sales_df(name, lookback_days=30)
+def run_safe_forecast(name: str, target_end_date: pd.Timestamp, days: int = 1) -> float:
+    df = fetch_continuous_sales_df(name, target_end_date=target_end_date, lookback_days=30)
     total_sales = df["y"].sum()
 
-    # Accurate Fallback: If no sales recorded, demand is 0.0
     if total_sales == 0:
         return 0.0
 
-    recent_7d = df.tail(7)["y"].mean()
     recent_30d = df["y"].mean()
     nonzero_days = (df["y"] > 0).sum()
 
@@ -211,34 +226,32 @@ def run_safe_forecast(name: str, days: int = 1) -> float:
         forecast = m.predict(future)
 
         future_yhat = forecast.tail(days)["yhat"].clip(lower=0.0)
-        predicted = float(future_yhat.sum())
-
-        return max(0.0, predicted)
+        return max(0.0, float(future_yhat.sum()))
     except Exception as e:
         logger.error(f"Prophet Exception [{name}]: {e}")
         return max(0.0, float(recent_30d * days))
 
 @app.post("/api/forecast-meals")
 async def forecast_meals(req: Optional[MealForecastRequest] = None):
-    if req and req.meals and len(req.meals) > 0:
-        target_meals = req.meals
-    else:
-        target_meals = list(RECIPES.keys())
+    target_date_str = req.target_date if req and req.target_date else datetime.now().strftime("%Y-%m-%d")
+    target_dt = pd.to_datetime(target_date_str).floor('D')
 
-    impact = get_weather_impact()
+    target_meals = req.meals if req and req.meals and len(req.meals) > 0 else list(RECIPES.keys())
+    weather_factor = get_unbiased_weather_factor()
     results = {}
 
     for meal in target_meals:
-        predicted_daily = run_safe_forecast(meal, days=1)
-        adjusted_val = predicted_daily * impact
-        
-        # Round to nearest integer (returns 0 if model predicts 0 or below 0.5)
+        predicted_daily = run_safe_forecast(meal, target_end_date=target_dt, days=1)
+        adjusted_val = predicted_daily * weather_factor
         results[meal] = int(round(adjusted_val))
 
     return results
 
 @app.post("/api/dashboard")
 async def dashboard(req: DashboardRequest):
+    target_date_str = req.target_date if req.target_date else datetime.now().strftime("%Y-%m-%d")
+    target_dt = pd.to_datetime(target_date_str).floor('D')
+
     out = []
     total_rec = 0.0
 
@@ -254,19 +267,17 @@ async def dashboard(req: DashboardRequest):
             except Exception as e:
                 logger.error(f"Stock fetch error [{name}]: {e}")
 
-        # Weekly ingredient requirement based on true forecast
         weekly_demand = 0.0
         clean_target = clean_name(name)
         for meal_name, recipe in RECIPES.items():
             for ing, qty in recipe.items():
                 if clean_name(ing) == clean_target or clean_target in clean_name(ing):
-                    meal_forecast = run_safe_forecast(meal_name, days=7)
+                    meal_forecast = run_safe_forecast(meal_name, target_end_date=target_dt, days=7)
                     weekly_demand += (meal_forecast * qty)
                     break
 
-        # Fallback to direct ingredient history (defaults to 0.0 if not sold)
         if weekly_demand == 0.0:
-            weekly_demand = run_safe_forecast(name, days=7)
+            weekly_demand = run_safe_forecast(name, target_end_date=target_dt, days=7)
 
         daily = weekly_demand / 7.0
         days_left = (stock / daily) if daily > 0 else (99.0 if stock > 0 else 0.0)
@@ -299,13 +310,100 @@ async def dashboard(req: DashboardRequest):
         "items": out
     }
 
+@app.get("/api/model-performance")
+async def model_performance(days: int = Query(14, ge=3, le=90)):
+    """
+    Computes Backtesting Indicators comparing historical model predictions vs actual Supabase records.
+    Returns Accuracy %, MAPE, MAE, and RMSE for Revenue and Meal Sales.
+    """
+    end_date = pd.Timestamp.now().floor('D') - pd.Timedelta(days=1)
+    start_date = end_date - pd.Timedelta(days=days - 1)
+    eval_dates = pd.date_range(start=start_date, end=end_date, freq='D')
+
+    actual_meals_list, pred_meals_list = [], []
+    actual_rev_list, pred_rev_list = [], []
+
+    for eval_dt in eval_dates:
+        # 1. Fetch Actual Sales for date
+        daily_actual_meals = 0
+        daily_actual_rev = 0.0
+        
+        if supabase:
+            try:
+                start_iso = eval_dt.strftime("%Y-%m-%d 00:00:00")
+                end_iso = eval_dt.strftime("%Y-%m-%d 23:59:59")
+                orders_res = supabase.table("orders").select("id, total_amount").gte("created_at", start_iso).lte("created_at", end_iso).execute()
+                if orders_res.data:
+                    for o in orders_res.data:
+                        daily_actual_rev += float(o.get("total_amount") or 0.0)
+
+                items_res = supabase.table("order_items").select("quantity").gte("created_at", start_iso).lte("created_at", end_iso).execute()
+                if items_res.data:
+                    daily_actual_meals = sum([int(i.get("quantity") or 0) for i in items_res.data])
+            except Exception as e:
+                logger.error(f"Error fetching actuals for performance backtest [{eval_dt}]: {e}")
+
+        # 2. Compute Model Prediction for date
+        daily_pred_meals = 0
+        daily_pred_rev = 0.0
+        for meal, price in MENU_MASTER_PRICES.items():
+            pred_q = run_safe_forecast(meal, target_end_date=eval_dt, days=1)
+            daily_pred_meals += pred_q
+            daily_pred_rev += (pred_q * price)
+
+        actual_meals_list.append(daily_actual_meals)
+        pred_meals_list.append(daily_pred_meals)
+        actual_rev_list.append(daily_actual_rev)
+        pred_rev_list.append(daily_pred_rev)
+
+    # Convert to Numpy for KPI Calculation
+    act_rev = np.array(actual_rev_list)
+    prd_rev = np.array(pred_rev_list)
+    act_m = np.array(actual_meals_list)
+    prd_m = np.array(pred_meals_list)
+
+    # MAE
+    mae_rev = float(np.mean(np.abs(prd_rev - act_rev)))
+    mae_meals = float(np.mean(np.abs(prd_m - act_m)))
+
+    # RMSE
+    rmse_rev = float(np.sqrt(np.mean((prd_rev - act_rev) ** 2)))
+    rmse_meals = float(np.sqrt(np.mean((prd_m - act_m) ** 2)))
+
+    # MAPE (%)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        mape_rev_arr = np.abs((act_rev - prd_rev) / np.where(act_rev == 0, 1.0, act_rev))
+        mape_meals_arr = np.abs((act_m - prd_m) / np.where(act_m == 0, 1.0, act_m))
+        
+    mape_rev = float(np.mean(mape_rev_arr) * 100.0)
+    mape_meals = float(np.mean(mape_meals_arr) * 100.0)
+
+    rev_accuracy = max(0.0, min(100.0, 100.0 - mape_rev))
+    meal_accuracy = max(0.0, min(100.0, 100.0 - mape_meals))
+
+    return {
+        "evaluation_period_days": days,
+        "revenue_kpis": {
+            "accuracy_percentage": round(rev_accuracy, 2),
+            "mape": round(mape_rev, 2),
+            "mae_zar": round(mae_rev, 2),
+            "rmse_zar": round(rmse_rev, 2)
+        },
+        "meal_sales_kpis": {
+            "accuracy_percentage": round(meal_accuracy, 2),
+            "mape": round(mape_meals, 2),
+            "mae_units": round(mae_meals, 2),
+            "rmse_units": round(rmse_meals, 2)
+        }
+    }
+
 @app.get("/", response_class=HTMLResponse)
 async def serve_home():
     file_path = os.path.join(os.path.dirname(__file__), "index.html")
     if os.path.exists(file_path):
-        with open(file_path, "r") as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             return f.read()
-    return "<h1>KOTAai Active</h1><p>index.html missing.</p>"
+    return "<h1>KOTAai Engine Active</h1><p>index.html missing from root directory.</p>"
 
 if __name__ == "__main__":
     import uvicorn
