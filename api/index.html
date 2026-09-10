@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>KOTAai Ingredient Intelligence</title>
+  <title>KOTAai Ingredient & Model Intelligence</title>
   <style>
     :root { 
       --high: #ff6b6b; 
@@ -15,16 +15,47 @@
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f4f8; padding: 15px; overflow-x: hidden; }
-    .container { max-width: 1250px; margin: 0 auto; }
+    .container { max-width: 1280px; margin: 0 auto; }
     
-    header { background: var(--header); color: white; padding: 1.5rem; border-radius: 16px; margin-bottom: 20px; text-align: center; }
-    header h1 { font-size: 1.8rem; margin-bottom: 5px; }
+    header { 
+      background: var(--header); 
+      color: white; 
+      padding: 1.5rem; 
+      border-radius: 16px; 
+      margin-bottom: 20px; 
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 15px;
+    }
+    header h1 { font-size: 1.8rem; }
     header p { font-size: 0.95rem; opacity: 0.85; }
+
+    /* Calendar Filter Controls */
+    .filter-bar {
+      background: rgba(255, 255, 255, 0.15);
+      backdrop-filter: blur(8px);
+      padding: 10px 16px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .filter-bar label { font-weight: 600; font-size: 0.9rem; }
+    .date-picker {
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: 1px solid #cbd5e1;
+      font-size: 0.95rem;
+      outline: none;
+      font-weight: 600;
+    }
 
     /* Summary Card Section */
     .summary-grid { 
       display: grid; 
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); 
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); 
       gap: 15px; 
       margin-bottom: 25px; 
     }
@@ -36,8 +67,10 @@
       border-top: 4px solid var(--accent); 
     }
     .summary-card.revenue { border-top-color: #2e7d32; background: linear-gradient(135deg, #ffffff 0%, #f1f8e9 100%); }
-    .summary-card h3 { font-size: 0.9rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
-    .summary-value { font-size: 2.1rem; font-weight: 800; color: var(--header); }
+    .summary-card.kpi { border-top-color: #8e44ad; background: linear-gradient(135deg, #ffffff 0%, #f3e5f5 100%); }
+    .summary-card h3 { font-size: 0.85rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+    .summary-value { font-size: 1.9rem; font-weight: 800; color: var(--header); }
+    .sub-kpi { font-size: 0.8rem; color: #475569; margin-top: 4px; font-weight: 600; }
 
     .dashboard-section { background: white; border-radius: 16px; padding: 20px; margin-bottom: 25px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
     .section-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 15px; }
@@ -50,7 +83,6 @@
       outline: none;
       width: 250px;
     }
-    .search-input:focus { border-color: var(--accent); }
 
     .table-container { width: 100%; overflow-x: auto; border-radius: 12px; max-height: 480px; overflow-y: auto; border: 1px solid #e2e8f0; }
     table { width: 100%; border-collapse: collapse; min-width: 750px; font-size: 0.9rem; }
@@ -69,23 +101,41 @@
 <body>
   <div class="container">
     <header>
-      <h1>🍛 KOTAai INGREDIENT INTELLIGENCE</h1>
-      <p>Real-Time Stock & Revenue Monitoring • Nosty'$ Fresh Fast Food</p>
+      <div>
+        <h1>🍛 KOTAai INGREDIENT INTELLIGENCE</h1>
+        <p>Unbiased Model Forecasting • Nosty'$ Fresh Fast Food</p>
+      </div>
+
+      <!-- Calendar Date Filter -->
+      <div class="filter-bar">
+        <label for="filter-date">📅 Select Date:</label>
+        <input type="date" id="filter-date" class="date-picker" onchange="fetchData()" />
+      </div>
     </header>
 
-    <!-- Summary Metrics Card -->
+    <!-- Metrics & Performance KPI Cards -->
     <div class="summary-grid">
       <div class="summary-card revenue">
         <h3>💰 Projected Daily Revenue</h3>
         <div class="summary-value" id="total-revenue-card">R 0.00</div>
       </div>
       <div class="summary-card">
-        <h3>📦 Total Forecasted Daily Meals</h3>
+        <h3>📦 Forecasted Daily Meals</h3>
         <div class="summary-value" id="total-meals-card">0 units</div>
+      </div>
+      <div class="summary-card kpi">
+        <h3>📈 Revenue Model Accuracy</h3>
+        <div class="summary-value" id="rev-accuracy-card">0.0%</div>
+        <div class="sub-kpi" id="rev-kpi-sub">MAPE: 0% | MAE: R 0.00</div>
+      </div>
+      <div class="summary-card kpi">
+        <h3>🎯 Meal Prediction Accuracy</h3>
+        <div class="summary-value" id="meal-accuracy-card">0.0%</div>
+        <div class="sub-kpi" id="meal-kpi-sub">MAPE: 0% | RMSE: 0 units</div>
       </div>
     </div>
 
-    <!-- Meal Sales Forecast Table Section -->
+    <!-- Meal Sales Forecast Table -->
     <div class="dashboard-section">
       <div class="section-header">
         <h3>📊 Daily Meal Sales & Revenue Forecast</h3>
@@ -109,7 +159,7 @@
       </div>
     </div>
 
-    <!-- Live Inventory Table Section -->
+    <!-- Live Inventory Table -->
     <div class="dashboard-section">
       <div class="section-header">
         <h3>📋 Live Inventory Dashboard</h3>
@@ -137,7 +187,6 @@
   </div>
 
   <script>
-    // Complete Menu Master Table (47 Items)
     const MENU_MASTER = {
       "Chips Large": { category: "Chips", price: 40.00 },
       "Chips Medium": { category: "Chips", price: 25.00 },
@@ -195,17 +244,25 @@
 
     let allMealDataRows = [];
 
+    // Default to today's date in calendar
+    document.getElementById('filter-date').value = new Date().toISOString().split('T')[0];
+
     async function fetchData() {
+      const selectedDate = document.getElementById('filter-date').value;
+
       try {
-        // 1. Fetch Forecast Data
-        const mRes = await fetch('/api/forecast-meals', { method: 'POST' });
+        // 1. Fetch Forecast Data with Date Filter
+        const mRes = await fetch('/api/forecast-meals', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target_date: selectedDate })
+        });
         const mData = await mRes.json();
         
         let grandTotalRevenue = 0;
         let grandTotalMeals = 0;
         allMealDataRows = [];
 
-        // Build list with all menu items (defaulting forecast to 0 if API hasn't returned a specific item)
         Object.keys(MENU_MASTER).forEach(mealName => {
           const itemMeta = MENU_MASTER[mealName];
           const forecastQty = mData[mealName] || 0;
@@ -223,13 +280,22 @@
           });
         });
 
-        // Update Summary Cards
         document.getElementById('total-revenue-card').textContent = `R ${grandTotalRevenue.toLocaleString('en-ZA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
         document.getElementById('total-meals-card').textContent = `${grandTotalMeals} units`;
 
         renderMealTable(allMealDataRows);
 
-        // 2. Fetch Full Inventory Table
+        // 2. Fetch Model Performance KPIs
+        const perfRes = await fetch('/api/model-performance?days=14');
+        const perf = await perfRes.json();
+
+        document.getElementById('rev-accuracy-card').textContent = `${perf.revenue_kpis.accuracy_percentage}%`;
+        document.getElementById('rev-kpi-sub').textContent = `MAPE: ${perf.revenue_kpis.mape}% | MAE: R ${perf.revenue_kpis.mae_zar}`;
+
+        document.getElementById('meal-accuracy-card').textContent = `${perf.meal_sales_kpis.accuracy_percentage}%`;
+        document.getElementById('meal-kpi-sub').textContent = `MAPE: ${perf.meal_sales_kpis.mape}% | RMSE: ${perf.meal_sales_kpis.rmse_units} units`;
+
+        // 3. Fetch Full Inventory Table with Date Filter
         const ingredients = [
           "Atchar", "Bacon", "Boere Wors", "Burger", "Rib Burger", "Cheese", 
           "Russian", "Cheesy Russian", "Chicken Russian", "Chicken Stripes", "Chips", 
@@ -241,7 +307,10 @@
         const dRes = await fetch('/api/dashboard', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ items: ingredients.map(n => ({ item_name: n })) })
+          body: JSON.stringify({ 
+            items: ingredients.map(n => ({ item_name: n })),
+            target_date: selectedDate 
+          })
         });
         const d = await dRes.json();
 
@@ -289,7 +358,6 @@
     }
 
     fetchData();
-    setInterval(fetchData, 300000);
   </script>
 </body>
-                           </html>
+</html>
