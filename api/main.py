@@ -1,8 +1,7 @@
 import os
 import logging
-import math
 import re
-from datetime import datetime, date, timedelta
+from datetime import datetime
 from typing import Optional, List, Dict
 
 import numpy as np
@@ -18,7 +17,7 @@ import requests
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="KOTAai Ingredient Intelligence", version="6.0.0")
+app = FastAPI(title="KOTAai Ingredient Intelligence", version="6.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -139,11 +138,6 @@ def clean_name(term: str) -> str:
     return re.sub(r'[^a-zA-Z0-9]', '', term).lower()
 
 def get_unbiased_weather_factor() -> float:
-    """
-    Unbiased Weather Model:
-    Fair/Sunny weather retains 100% (1.0) baseline expectation.
-    Subtle rain probability dampens sales proportionally without inflating zero-rain forecasts.
-    """
     try:
         r = requests.get(
             "https://api.open-meteo.com/v1/forecast?latitude=-26.85&longitude=26.66&daily=precipitation_probability_max&forecast_days=1&timezone=Africa/Johannesburg", 
@@ -151,8 +145,7 @@ def get_unbiased_weather_factor() -> float:
         )
         prob = float(r.json()["daily"]["precipitation_probability_max"][0])
         if prob <= 20.0:
-            return 1.0  # Unbiased 1.0 multiplier for clear/dry days
-        # Gradual dampening factor between 0.82 and 1.0 during heavy rain
+            return 1.0
         return float(max(0.80, 1.0 - (prob - 20.0) * 0.0025))
     except Exception as e:
         logger.warning(f"Weather API unavailable: {e}")
@@ -252,28 +245,39 @@ async def dashboard(req: DashboardRequest):
     target_date_str = req.target_date if req.target_date else datetime.now().strftime("%Y-%m-%d")
     target_dt = pd.to_datetime(target_date_str).floor('D')
 
+    # OPTIMIZATION 1: Batch fetch all current stock levels from Supabase in ONE query
+    stock_dict = {}
+    if supabase and req.items:
+        ingredient_names = [i.item_name.strip() for i in req.items]
+        try:
+            stock_res = supabase.table("ingredient_stock").select("ingredient_name, current_stock").in_("ingredient_name", ingredient_names).execute()
+            if stock_res.data:
+                for row in stock_res.data:
+                    stock_dict[clean_name(row["ingredient_name"])] = float(row["current_stock"])
+        except Exception as e:
+            logger.error(f"Batch stock fetch error: {e}")
+
+    # OPTIMIZATION 2: Pre-compute weekly meal forecasts ONCE instead of recalculating for every ingredient
+    meal_forecast_cache = {}
+    for meal_name in RECIPES.keys():
+        meal_forecast_cache[meal_name] = run_safe_forecast(meal_name, target_end_date=target_dt, days=7)
+
     out = []
     total_rec = 0.0
 
     for entry in req.items:
         name = entry.item_name.strip()
-        stock = float(entry.current_stock or 0.0)
-
-        if supabase:
-            try:
-                stock_res = supabase.table("ingredient_stock").select("current_stock").ilike("ingredient_name", name).execute()
-                if stock_res.data:
-                    stock = float(stock_res.data[0]["current_stock"])
-            except Exception as e:
-                logger.error(f"Stock fetch error [{name}]: {e}")
+        clean_target = clean_name(name)
+        
+        # Priority: Supabase Bulk Fetch -> Payload stock -> 0.0
+        stock = stock_dict.get(clean_target, float(entry.current_stock or 0.0))
 
         weekly_demand = 0.0
-        clean_target = clean_name(name)
+        # Fast lookup across pre-calculated meal forecasts
         for meal_name, recipe in RECIPES.items():
             for ing, qty in recipe.items():
                 if clean_name(ing) == clean_target or clean_target in clean_name(ing):
-                    meal_forecast = run_safe_forecast(meal_name, target_end_date=target_dt, days=7)
-                    weekly_demand += (meal_forecast * qty)
+                    weekly_demand += (meal_forecast_cache[meal_name] * qty)
                     break
 
         if weekly_demand == 0.0:
@@ -312,10 +316,6 @@ async def dashboard(req: DashboardRequest):
 
 @app.get("/api/model-performance")
 async def model_performance(days: int = Query(14, ge=3, le=90)):
-    """
-    Computes Backtesting Indicators comparing historical model predictions vs actual Supabase records.
-    Returns Accuracy %, MAPE, MAE, and RMSE for Revenue and Meal Sales.
-    """
     end_date = pd.Timestamp.now().floor('D') - pd.Timedelta(days=1)
     start_date = end_date - pd.Timedelta(days=days - 1)
     eval_dates = pd.date_range(start=start_date, end=end_date, freq='D')
@@ -324,7 +324,6 @@ async def model_performance(days: int = Query(14, ge=3, le=90)):
     actual_rev_list, pred_rev_list = [], []
 
     for eval_dt in eval_dates:
-        # 1. Fetch Actual Sales for date
         daily_actual_meals = 0
         daily_actual_rev = 0.0
         
@@ -343,7 +342,6 @@ async def model_performance(days: int = Query(14, ge=3, le=90)):
             except Exception as e:
                 logger.error(f"Error fetching actuals for performance backtest [{eval_dt}]: {e}")
 
-        # 2. Compute Model Prediction for date
         daily_pred_meals = 0
         daily_pred_rev = 0.0
         for meal, price in MENU_MASTER_PRICES.items():
@@ -356,21 +354,17 @@ async def model_performance(days: int = Query(14, ge=3, le=90)):
         actual_rev_list.append(daily_actual_rev)
         pred_rev_list.append(daily_pred_rev)
 
-    # Convert to Numpy for KPI Calculation
     act_rev = np.array(actual_rev_list)
     prd_rev = np.array(pred_rev_list)
     act_m = np.array(actual_meals_list)
     prd_m = np.array(pred_meals_list)
 
-    # MAE
     mae_rev = float(np.mean(np.abs(prd_rev - act_rev)))
     mae_meals = float(np.mean(np.abs(prd_m - act_m)))
 
-    # RMSE
     rmse_rev = float(np.sqrt(np.mean((prd_rev - act_rev) ** 2)))
     rmse_meals = float(np.sqrt(np.mean((prd_m - act_m) ** 2)))
 
-    # MAPE (%)
     with np.errstate(divide='ignore', invalid='ignore'):
         mape_rev_arr = np.abs((act_rev - prd_rev) / np.where(act_rev == 0, 1.0, act_rev))
         mape_meals_arr = np.abs((act_m - prd_m) / np.where(act_m == 0, 1.0, act_m))
