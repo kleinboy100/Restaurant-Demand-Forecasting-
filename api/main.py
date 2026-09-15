@@ -1,24 +1,30 @@
 import os
 import logging
-import re
-from datetime import datetime
-from typing import Optional, List, Dict
+from datetime import datetime, timedelta
+from typing import Optional, Dict, Any, List
 
 import numpy as np
 import pandas as pd
-from prophet import Prophet
-from pydantic import BaseModel
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from pydantic import BaseModel, Field
 from supabase import create_client, Client
-import requests
+from prophet import Prophet
+
+# ==========================================
+# 1. LOGGING & APP CONFIGURATION
+# ==========================================
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("demand_forecaster")
 
-app = FastAPI(title="KOTAai Ingredient Intelligence", version="6.1.0")
+app = FastAPI(
+    title="Demand Forecasting & Backtesting Engine",
+    description="Production-grade FastAPI service providing Prophet-backed forecasts and zero-safe model backtesting.",
+    version="2.1.0"
+)
 
+# CORS Middleware Configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -27,374 +33,302 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-supabase: Optional[Client] = None
+# Supabase Client Instantiation
+SUPABASE_URL: str = os.getenv("SUPABASE_URL", "https://your-supabase-project.supabase.co")
+SUPABASE_KEY: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY", os.getenv("SUPABASE_ANON_KEY", "your-supabase-key"))
 
-def init_supabase():
-    global supabase
-    url = os.getenv("SUPABASE_URL")
-    key = os.getenv("SUPABASE_ANON_KEY")
-    if url and key:
-        supabase = create_client(url, key)
+try:
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+except Exception as e:
+    logger.error(f"Failed to initialize Supabase client: {str(e)}")
+    supabase = None
 
-@app.on_event("startup")
-async def startup():
-    init_supabase()
+# ==========================================
+# 2. SCHEMAS
+# ==========================================
 
-class DashboardItem(BaseModel):
-    item_name: str
-    current_stock: Optional[float] = None
+class ForecastItem(BaseModel):
+    ds: str = Field(..., description="Date formatted as YYYY-MM-DD")
+    predicted_revenue: float = Field(..., description="Estimated total revenue (ZAR)")
+    revenue_lower: float = Field(..., description="Lower confidence bound for revenue")
+    revenue_upper: float = Field(..., description="Upper confidence bound for revenue")
+    predicted_meals: int = Field(..., description="Estimated total meal units required")
+    meals_lower: int = Field(..., description="Lower confidence bound for meals")
+    meals_upper: int = Field(..., description="Upper confidence bound for meals")
 
-class DashboardRequest(BaseModel):
-    items: List[DashboardItem]
-    target_date: Optional[str] = None
+class MetricDetail(BaseModel):
+    accuracy: float
+    mape: float
+    mae: float
+    rmse: float
+    active_days_evaluated: int
+    total_days_in_window: int
+    status_note: Optional[str] = None
 
-class MealForecastRequest(BaseModel):
-    meals: Optional[List[str]] = None
-    target_date: Optional[str] = None
+class PerformanceResponse(BaseModel):
+    revenue: MetricDetail
+    meals: MetricDetail
 
-RECIPES: Dict[str, Dict[str, float]] = {
-    # --- Tops & Add-ons ---
-    "Frankfurter Short": {"Frankfurter": 1.0},
-    "Continental Russian Long": {"Russian": 1.0},
-    "Continental Russian Short": {"Russian": 1.0},
-    "Extra Sauce": {"Nosty Sauce": 1.0},
-    "Atchar": {"Atchar": 1.0},
-    "Egg": {"Egg": 1.0},
-    "Special Garlic": {"Special Garlic": 1.0},
-    "Burger": {"Burger": 1.0},
-    "Vienna": {"Vienna": 1.0},
-    "Cheese": {"Cheese": 1.0},
-    "Liver": {"Liver": 1.0},
-    "Cheese Russian Long": {"Cheesy Russian": 1.0},
-    "Cheese Russian Short": {"Cheesy Russian": 1.0},
-    "Frankfurter Long": {"Frankfurter": 1.0},
+# ==========================================
+# 3. DATA ACCESS & ETL LAYER
+# ==========================================
 
-    # --- Chips ---
-    "Chips Extra Large": {"Chips": 4.0},
-    "Chips Large": {"Chips": 3.0},
-    "Chips Medium": {"Chips": 2.0},
-    "Chips Small": {"Chips": 1.0},
-
-    # --- Combos ---
-    "Combo 10": {"Chips": 0.2, "Magwenya": 3.0},
-    "Combo 13": {"Chips": 0.3, "Magwenya": 4.0, "Polony": 0.0025},
-    "Combo 15": {"Chips": 0.2, "Magwenya": 5.0, "Polony": 0.025},
-    "Combo 25": {"Chips": 0.4, "Magwenya": 6.0, "Polony": 0.0025, "Vienna": 1.0},
-    "Combo 35": {"Chips": 0.3, "Magwenya": 6.0, "Polony": 0.025, "Russian": 1.0},
-    "Combo 45": {"Atchar": 2.5, "Chips": 1.0, "Liver": 1.0, "Magwenya": 6.0, "Russian": 1.0},
-
-    # --- Dagwoods ---
-    "Matlosana Dagwood": {"Bacon": 1.0, "Bread": 1.0, "Cheese": 2.0, "Cheesy Russian": 1.0, "Club Stake": 1.0, "Egg": 1.0, "Nosty Sauce": 1.0, "Onion": 0.0125, "Tomato": 0.167},
-    "Mofarasai Dagwood": {"Bacon": 1.0, "Bread": 1.0, "Cheese": 2.0, "Cheesy Russian": 1.0, "Egg": 1.0, "Nosty Sauce": 1.0, "Rib Burger": 1.0, "Tomato": 0.167},
-    "Original Dagwood": {"Bacon": 1.0, "Bread": 1.0, "Burger": 1.0, "Cheese": 1.0, "Egg": 1.0, "Nosty Sauce": 1.0, "Russian": 1.0, "Tomato": 0.167},
-    "Turbo Dagwood": {"Bread": 1.0, "Cheese": 1.0, "Chicken Russian": 1.0, "Egg": 1.0, "Nosty Sauce": 1.0, "Rib Burger": 1.0, "Tomato": 0.167},
-
-    # --- Loafs ---
-    "N12_1": {"Bread": 1.0, "Cheese": 2.0, "Chips": 1.0, "Egg": 2.0, "Loaf": 0.25, "Nosty Sauce": 1.0, "Polony": 0.1, "Russian": 1.0, "Vienna": 1.0},
-    "N12_2": {"Bread": 1.0, "Burger": 1.0, "Cheese": 2.0, "Chips": 1.0, "Egg": 2.0, "Loaf": 0.25, "Nosty Sauce": 1.0, "Polony": 0.15, "Russian": 1.0, "Vienna": 1.0},
-    "N12_3": {"Bacon": 1.0, "Bread": 1.0, "Burger": 2.0, "Cheese": 3.0, "Chips": 2.0, "Egg": 3.0, "Loaf": 0.25, "Nosty Sauce": 1.0, "Polony": 0.2, "Russian": 2.0, "Vienna": 2.0},
-    "N12_4": {"Bacon": 2.0, "Bread": 1.0, "Burger": 2.0, "Cheese": 4.0, "Chips": 2.0, "Egg": 4.0, "Loaf": 0.25, "Nosty Sauce": 1.0, "Polony": 0.25, "Russian": 3.0, "Vienna": 3.0},
-
-    # --- Kota Menu ---
-    "BBL Tower of Terror": {"Bacon": 1.0, "Bread": 0.25, "Cheese": 1.0, "Chips": 0.2, "Egg": 1.0, "Frankfurter": 1.0, "Lettuce": 0.005, "Polony": 0.0025, "Rib Burger": 1.0, "Russian": 1.0, "Nosty Sauce": 0.0005, "Vienna": 1.0},
-    "Bosrand": {"Bread": 0.25, "Cheese": 1.0, "Chips": 0.4, "Egg": 1.0, "Lettuce": 0.005, "Polony": 0.00025, "Nosty Sauce": 0.005, "Russian": 1.0},
-    "Cheesy D": {"Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 0.2, "Egg": 1.0, "Lettuce": 0.005, "Nosty Sauce": 0.025, "Russian": 1.0},
-    "Curry Fish Kota": {"Atchar": 1.0, "Bread": 0.25, "Curry Fish": 1.0},
-    "Dark City": {"Bread": 0.25, "Cheese": 1.0, "Cheesy Russian": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Nosty Sauce": 1.0},
-    "Di_Y_Kota": {"Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Ham": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Nosty Sauce": 1.0},
-    "Di_Z_Kota": {"Bread": 0.25, "Cheese": 1.0, "Cheesy Russian": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Nosty Sauce": 1.0},
-    "Down": {"Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Nosty Sauce": 1.0},
-    "Ext 10": {"Bread": 0.25, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Nosty Sauce": 1.0, "Polony": 0.025},
-    "Ext 6": {"Bacon": 1.0, "Bread": 0.25, "Chips": 1.0, "Egg": 1.0, "Fish Fillet": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Nosty Sauce": 1.0},
-    "Flamwood": {"Bacon": 1.0, "Bread": 0.25, "Cheese": 1.0, "Chicken Stripes": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Nosty Sauce": 1.0},
-    "J_town": {"Atchar": 1.0, "Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Nosty Sauce": 1.0, "Tomato": 0.167},
-    "La Hof": {"Bacon": 1.0, "Bread": 0.25, "Cheesy Russian": 1.0, "Chicken Stripes": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Nosty Sauce": 1.0},
-    "Laprovance": {"Bacon": 1.0, "Boere Wors": 1.0, "Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Club Stake": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Onion": 0.0125, "Polony": 0.025, "Russian": 1.0, "Nosty Sauce": 1.0},
-    "Mince Kota": {"Atchar": 1.0, "Bread": 0.25, "Mince": 1.0},
-    "Phelandaba": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Nosty Sauce": 1.0},
-    "Stop 1": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Polony": 0.025, "Nosty Sauce": 1.0},
-    "Stop 18": {"Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Polony": 0.025, "Russian": 1.0, "Nosty Sauce": 1.0},
-    "Stop 5_1": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Nosty Sauce": 1.0, "Vienna": 1.0},
-    "Stop 5+": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Ham": 1.0, "Lettuce": 1.0, "Nosty Sauce": 1.0, "Vienna": 1.0},
-    "Sun City": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Frankfurter": 1.0, "Lettuce": 1.0, "Nosty Sauce": 1.0},
-    "Tower of Terror": {"Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Frankfurter": 1.0, "Lettuce": 1.0, "Polony": 0.025, "Russian": 1.0, "Nosty Sauce": 1.0}
-}
-
-MENU_MASTER_PRICES = {
-    "Chips Large": 40.00, "Chips Medium": 25.00, "Chips Extra Large": 60.00, "Chips Small": 15.00,
-    "Combo 35": 35.00, "Combo 15": 15.00, "Combo 45": 45.00, "Combo 25": 25.00, "Combo 10": 10.00, "Combo 13": 13.00,
-    "Turbo Dagwood": 80.00, "Matlosana Dagwood": 120.00, "Mofarasai Dagwood": 75.00, "Original Dagwood": 60.00,
-    "Tower of Terror": 120.00, "La Hof": 85.00, "Ext 10": 20.00, "Cheesy D": 70.00, "Ext 6": 75.00,
-    "Stop 1": 25.00, "Stop 5_1": 30.00, "Stop 5+": 35.00, "Bosrand": 40.00, "Sun City": 45.00,
-    "Phelandaba": 45.00, "Down": 45.00, "Di_Z_Kota": 55.00, "J_town": 65.00, "Flamwood": 75.00,
-    "BBL Tower of Terror": 140.00, "Laprovance": 199.00, "Stop 18": 40.00, "Dark City": 50.00, "Di_Y_Kota": 60.00,
-    "N12_4": 199.00, "N12_3": 140.00, "N12_1": 80.00, "N12_2": 99.00, "Frankfurter Short": 18.00,
-    "Continental Russian Long": 25.00, "Continental Russian Short": 18.00, "Extra Sauce": 3.00,
-    "Atchar": 5.00, "Egg": 5.00, "Special Garlic": 5.00, "Burger": 12.00, "Vienna": 8.00, "Cheese": 5.00,
-    "Liver": 5.00, "Cheese Russian Long": 30.00, "Cheese Russian Short": 22.00, "Frankfurter Long": 25.00
-}
-
-def clean_name(term: str) -> str:
-    return re.sub(r'[^a-zA-Z0-9]', '', term).lower()
-
-def get_unbiased_weather_factor() -> float:
-    try:
-        r = requests.get(
-            "https://api.open-meteo.com/v1/forecast?latitude=-26.85&longitude=26.66&daily=precipitation_probability_max&forecast_days=1&timezone=Africa/Johannesburg", 
-            timeout=3
-        )
-        prob = float(r.json()["daily"]["precipitation_probability_max"][0])
-        if prob <= 20.0:
-            return 1.0
-        return float(max(0.80, 1.0 - (prob - 20.0) * 0.0025))
-    except Exception as e:
-        logger.warning(f"Weather API unavailable: {e}")
-        return 1.0
-
-def fetch_continuous_sales_df(item_name: str, target_end_date: pd.Timestamp, lookback_days: int = 30) -> pd.DataFrame:
-    start_date = target_end_date - pd.Timedelta(days=lookback_days - 1)
-    full_date_range = pd.date_range(start=start_date, end=target_end_date, freq='D')
-    default_df = pd.DataFrame({"ds": full_date_range, "y": 0.0})
-
+def fetch_aggregated_daily_data() -> pd.DataFrame:
+    """
+    Retrieves sales and item records from Supabase, aggregates daily total revenue 
+    and meal quantities, and fills missing timeline gaps with explicit zeroes.
+    """
     if not supabase:
-        return default_df
+        logger.warning("Supabase client is uninitialized. Returning empty DataFrame.")
+        return pd.DataFrame(columns=["ds", "revenue", "meals"])
 
     try:
-        search_token = item_name.split()[0] if item_name.split() else item_name
-        res = supabase.table("order_items").select("*").ilike("item_name", f"%{search_token}%").execute()
+        # Fetch orders
+        orders_res = supabase.table("orders").select("id, created_at, total_price, status").execute()
+        orders_data = orders_res.data or []
+
+        if not orders_data:
+            return pd.DataFrame(columns=["ds", "revenue", "meals"])
+
+        df_orders = pd.DataFrame(orders_data)
         
-        if not res.data:
-            return default_df
+        # Exclude cancelled transactions if status column exists
+        if "status" in df_orders.columns:
+            df_orders = df_orders[df_orders["status"].str.lower() != "cancelled"]
 
-        df_items = pd.DataFrame(res.data)
+        if df_orders.empty:
+            return pd.DataFrame(columns=["ds", "revenue", "meals"])
 
-        target_clean = clean_name(item_name)
-        df_items["clean_name"] = df_items["item_name"].astype(str).apply(clean_name)
-        df_matched = df_items[df_items["clean_name"].str.contains(target_clean, na=False) | df_items["clean_name"].apply(lambda x: target_clean in x)]
+        # Parse timestamps into normalized dates
+        df_orders["ds"] = pd.to_datetime(df_orders["created_at"]).dt.tz_localize(None).dt.floor("D")
+        df_orders["total_price"] = pd.to_numeric(df_orders["total_price"], errors="coerce").fillna(0.0)
 
-        if df_matched.empty:
-            return default_df
-
-        if "created_at" in df_matched.columns:
-            df_matched["ds"] = pd.to_datetime(df_matched["created_at"]).dt.tz_localize(None).dt.floor('D')
-            daily_agg = df_matched.groupby("ds")["quantity"].sum().reset_index().rename(columns={"quantity": "y"})
-        elif "order_id" in df_matched.columns:
-            order_ids = df_matched["order_id"].dropna().unique().tolist()
-            if not order_ids:
-                return default_df
-            orders = supabase.table("orders").select("id, created_at").in_("id", order_ids).execute()
-            if not orders.data:
-                return default_df
-            df_orders = pd.DataFrame(orders.data).rename(columns={"id": "order_id"})
-            df = pd.merge(df_matched, df_orders, on="order_id")
-            df["ds"] = pd.to_datetime(df["created_at"]).dt.tz_localize(None).dt.floor('D')
-            daily_agg = df.groupby("ds")["quantity"].sum().reset_index().rename(columns={"quantity": "y"})
-        else:
-            return default_df
-
-        merged_df = pd.merge(pd.DataFrame({"ds": full_date_range}), daily_agg, on="ds", how="left").fillna(0.0)
-        return merged_df
-
-    except Exception as e:
-        logger.error(f"Data Fetch Error [{item_name}]: {e}")
-        return default_df
-
-def run_safe_forecast(name: str, target_end_date: pd.Timestamp, days: int = 1) -> float:
-    df = fetch_continuous_sales_df(name, target_end_date=target_end_date, lookback_days=30)
-    total_sales = df["y"].sum()
-
-    if total_sales == 0:
-        return 0.0
-
-    recent_30d = df["y"].mean()
-    nonzero_days = (df["y"] > 0).sum()
-
-    if nonzero_days < 3:
-        return float(recent_30d * days)
-
-    try:
-        m = Prophet(yearly_seasonality=False, weekly_seasonality=True, daily_seasonality=False)
-        m.fit(df)
-        future = m.make_future_dataframe(periods=days)
-        forecast = m.predict(future)
-
-        future_yhat = forecast.tail(days)["yhat"].clip(lower=0.0)
-        return max(0.0, float(future_yhat.sum()))
-    except Exception as e:
-        logger.error(f"Prophet Exception [{name}]: {e}")
-        return max(0.0, float(recent_30d * days))
-
-@app.post("/api/forecast-meals")
-async def forecast_meals(req: Optional[MealForecastRequest] = None):
-    target_date_str = req.target_date if req and req.target_date else datetime.now().strftime("%Y-%m-%d")
-    target_dt = pd.to_datetime(target_date_str).floor('D')
-
-    target_meals = req.meals if req and req.meals and len(req.meals) > 0 else list(RECIPES.keys())
-    weather_factor = get_unbiased_weather_factor()
-    results = {}
-
-    for meal in target_meals:
-        predicted_daily = run_safe_forecast(meal, target_end_date=target_dt, days=1)
-        adjusted_val = predicted_daily * weather_factor
-        results[meal] = int(round(adjusted_val))
-
-    return results
-
-@app.post("/api/dashboard")
-async def dashboard(req: DashboardRequest):
-    target_date_str = req.target_date if req.target_date else datetime.now().strftime("%Y-%m-%d")
-    target_dt = pd.to_datetime(target_date_str).floor('D')
-
-    stock_dict = {}
-    if supabase and req.items:
-        ingredient_names = [i.item_name.strip() for i in req.items]
+        # Attempt to aggregate actual item counts from order_items table
         try:
-            stock_res = supabase.table("ingredient_stock").select("ingredient_name, current_stock").in_("ingredient_name", ingredient_names).execute()
-            if stock_res.data:
-                for row in stock_res.data:
-                    stock_dict[clean_name(row["ingredient_name"])] = float(row["current_stock"])
-        except Exception as e:
-            logger.error(f"Batch stock fetch error: {e}")
+            items_res = supabase.table("order_items").select("order_id, quantity").execute()
+            items_data = items_res.data or []
+            if items_data:
+                df_items = pd.DataFrame(items_data)
+                df_items["quantity"] = pd.to_numeric(df_items["quantity"], errors="coerce").fillna(1)
+                order_qty = df_items.groupby("order_id")["quantity"].sum().reset_index()
+                df_orders = df_orders.merge(order_qty, left_on="id", right_on="order_id", how="left")
+                df_orders["quantity"] = df_orders["quantity"].fillna(1)
+            else:
+                df_orders["quantity"] = 1
+        except Exception as item_err:
+            logger.warning(f"Failed to join order_items, falling back to 1 unit per order: {str(item_err)}")
+            df_orders["quantity"] = 1
 
-    meal_forecast_cache = {}
-    for meal_name in RECIPES.keys():
-        meal_forecast_cache[meal_name] = run_safe_forecast(meal_name, target_end_date=target_dt, days=7)
+        # Aggregate metrics per single calendar day
+        daily_summary = df_orders.groupby("ds").agg(
+            revenue=("total_price", "sum"),
+            meals=("quantity", "sum")
+        ).reset_index()
 
-    out = []
-    total_rec = 0.0
-
-    for entry in req.items:
-        name = entry.item_name.strip()
-        clean_target = clean_name(name)
+        # Reindex across a contiguous calendar range to ensure accurate backtesting time windows
+        min_date = daily_summary["ds"].min()
+        max_date = daily_summary["ds"].max()
+        full_date_range = pd.date_range(start=min_date, end=max_date, freq="D")
         
-        stock = stock_dict.get(clean_target, float(entry.current_stock or 0.0))
+        full_df = pd.DataFrame({"ds": full_date_range}).merge(daily_summary, on="ds", how="left").fillna(0.0)
+        return full_df.sort_values("ds").reset_index(drop=True)
 
-        weekly_demand = 0.0
-        for meal_name, recipe in RECIPES.items():
-            for ing, qty in recipe.items():
-                if clean_name(ing) == clean_target or clean_target in clean_name(ing):
-                    weekly_demand += (meal_forecast_cache[meal_name] * qty)
-                    break
+    except Exception as e:
+        logger.error(f"Error fetching historical records: {str(e)}")
+        return pd.DataFrame(columns=["ds", "revenue", "meals"])
 
-        if weekly_demand == 0.0:
-            weekly_demand = run_safe_forecast(name, target_end_date=target_dt, days=7)
+# ==========================================
+# 4. PROPHET MODELING PIPELINE
+# ==========================================
 
-        daily = weekly_demand / 7.0
-        days_left = (stock / daily) if daily > 0 else (99.0 if stock > 0 else 0.0)
-
-        recommend = max(0.0, (weekly_demand * 1.5) - stock)
-        total_rec += recommend
-
-        urgency = "HIGH" if days_left < 3 else ("MEDIUM" if days_left < 7 else "LOW")
-        status = "CRITICAL" if days_left < 3 else "OK"
-        action = "REORDER NOW" if days_left < 3 else "Monitor stock"
-
-        out.append({
-            "item_name": name,
-            "current_stock": round(stock, 1),
-            "weekly_demand": round(weekly_demand, 1),
-            "days_left": round(days_left, 1),
-            "recommended_order": round(recommend, 1),
-            "urgency": urgency,
-            "status": status,
-            "action": action
+def train_prophet(df: pd.DataFrame, target_column: str) -> Prophet:
+    """
+    Fits a Facebook Prophet time-series model on target series ('revenue' or 'meals').
+    Handles low sample edge cases with synthetic stabilization.
+    """
+    train_data = df[["ds", target_column]].rename(columns={target_column: "y"})
+    
+    # Require at least 2 non-null historical points
+    if len(train_data) < 2 or train_data["y"].nunique() <= 1:
+        model = Prophet(yearly_seasonality=False, weekly_seasonality=False, daily_seasonality=False)
+        fallback_df = pd.DataFrame({
+            "ds": [pd.Timestamp.now() - pd.Timedelta(days=1), pd.Timestamp.now()],
+            "y": [1.0, 1.0]
         })
+        model.fit(fallback_df)
+        return model
 
+    model = Prophet(
+        yearly_seasonality=False,
+        weekly_seasonality=True,
+        daily_seasonality=False,
+        changepoint_prior_scale=0.05,
+        seasonality_prior_scale=10.0
+    )
+    
+    model.fit(train_data)
+    return model
+
+# ==========================================
+# 5. ENDPOINTS & BUSINESS LOGIC
+# ==========================================
+
+@app.get("/health", status_code=200)
+def health_check():
     return {
-        "summary": {
-            "total_items": len(out),
-            "critical_items": len([x for x in out if x["urgency"] == "HIGH"]),
-            "total_recommended": round(total_rec, 1),
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        },
-        "items": out
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "database_connected": supabase is not None
     }
 
-@app.get("/api/model-performance")
-async def model_performance(days: int = Query(14, ge=3, le=90)):
-    end_date = pd.Timestamp.now().floor('D') - pd.Timedelta(days=1)
-    start_date = end_date - pd.Timedelta(days=days - 1)
-    eval_dates = pd.date_range(start=start_date, end=end_date, freq='D')
 
-    actual_meals_list, pred_meals_list = [], []
-    actual_rev_list, pred_rev_list = [], []
+@app.get("/api/model-performance", response_model=PerformanceResponse)
+def get_model_performance(backtest_days: int = Query(default=14, ge=1, le=90)):
+    """
+    Evaluates forecasting performance on a sliding historical backtest window.
+    Filters zero-activity days out of MAPE calculations to eliminate infinite errors.
+    """
+    df = fetch_aggregated_daily_data()
 
-    for eval_dt in eval_dates:
-        daily_actual_meals = 0
-        daily_actual_rev = 0.0
-        
-        if supabase:
-            try:
-                start_iso = eval_dt.strftime("%Y-%m-%d 00:00:00")
-                end_iso = eval_dt.strftime("%Y-%m-%d 23:59:59")
-                orders_res = supabase.table("orders").select("id, total_amount").gte("created_at", start_iso).lte("created_at", end_iso).execute()
-                if orders_res.data:
-                    for o in orders_res.data:
-                        daily_actual_rev += float(o.get("total_amount") or 0.0)
+    if df.empty or len(df) <= backtest_days + 2:
+        empty_metric = MetricDetail(
+            accuracy=0.0, mape=0.0, mae=0.0, rmse=0.0,
+            active_days_evaluated=0, total_days_in_window=0,
+            status_note="Insufficient transaction history for evaluation window."
+        )
+        return PerformanceResponse(revenue=empty_metric, meals=empty_metric)
 
-                items_res = supabase.table("order_items").select("quantity").gte("created_at", start_iso).lte("created_at", end_iso).execute()
-                if items_res.data:
-                    daily_actual_meals = sum([int(i.get("quantity") or 0) for i in items_res.data])
-            except Exception as e:
-                logger.error(f"Error fetching actuals for performance backtest [{eval_dt}]: {e}")
+    # Cutoff splitting logic
+    max_date = df["ds"].max()
+    cutoff_date = max_date - pd.Timedelta(days=backtest_days)
 
-        daily_pred_meals = 0
-        daily_pred_rev = 0.0
-        for meal, price in MENU_MASTER_PRICES.items():
-            pred_q = run_safe_forecast(meal, target_end_date=eval_dt, days=1)
-            daily_pred_meals += pred_q
-            daily_pred_rev += (pred_q * price)
+    train_df = df[df["ds"] <= cutoff_date]
+    test_df = df[df["ds"] > cutoff_date]
 
-        actual_meals_list.append(daily_actual_meals)
-        pred_meals_list.append(daily_pred_meals)
-        actual_rev_list.append(daily_actual_rev)
-        pred_rev_list.append(daily_pred_rev)
+    if train_df.empty or test_df.empty:
+        raise HTTPException(status_code=400, detail="Requested backtest window too large for available dataset.")
 
-    act_rev = np.array(actual_rev_list)
-    prd_rev = np.array(pred_rev_list)
-    act_m = np.array(actual_meals_list)
-    prd_m = np.array(pred_meals_list)
+    # Train independent models
+    rev_model = train_prophet(train_df, "revenue")
+    meal_model = train_prophet(train_df, "meals")
 
+    # Generate out-of-sample predictions
+    future_dates = test_df[["ds"]].copy()
+    pred_rev = rev_model.predict(future_dates)
+    pred_meals = meal_model.predict(future_dates)
+
+    # Actuals vs Predictions
+    act_rev = test_df["revenue"].values
+    prd_rev = np.maximum(0.0, pred_rev["yhat"].values)
+
+    act_m = test_df["meals"].values
+    prd_m = np.maximum(0.0, pred_meals["yhat"].values)
+
+    # --- ERROR METRICS CALCULATION ---
+    
+    # 1. Standard Linear Metrics (MAE & RMSE)
     mae_rev = float(np.mean(np.abs(prd_rev - act_rev)))
     mae_meals = float(np.mean(np.abs(prd_m - act_m)))
 
     rmse_rev = float(np.sqrt(np.mean((prd_rev - act_rev) ** 2)))
     rmse_meals = float(np.sqrt(np.mean((prd_m - act_m) ** 2)))
 
-    with np.errstate(divide='ignore', invalid='ignore'):
-        mape_rev_arr = np.abs((act_rev - prd_rev) / np.where(act_rev == 0, 1.0, act_rev))
-        mape_meals_arr = np.abs((act_m - prd_m) / np.where(act_m == 0, 1.0, act_m))
-        
-    mape_rev = float(np.mean(mape_rev_arr) * 100.0)
-    mape_meals = float(np.mean(mape_meals_arr) * 100.0)
+    # 2. Masking Zero-Actual Days for Safe MAPE Calculation
+    rev_mask = act_rev > 0
+    meal_mask = act_m > 0
 
-    rev_accuracy = max(0.0, min(100.0, 100.0 - mape_rev))
-    meal_accuracy = max(0.0, min(100.0, 100.0 - mape_meals))
+    if np.any(rev_mask):
+        mape_rev = float(np.mean(np.abs((act_rev[rev_mask] - prd_rev[rev_mask]) / act_rev[rev_mask])) * 100.0)
+    else:
+        mape_rev = 0.0
 
-    return {
-        "evaluation_period_days": days,
-        "revenue_kpis": {
-            "accuracy_percentage": round(rev_accuracy, 2),
-            "mape": round(mape_rev, 2),
-            "mae_zar": round(mae_rev, 2),
-            "rmse_zar": round(rmse_rev, 2)
-        },
-        "meal_sales_kpis": {
-            "accuracy_percentage": round(meal_accuracy, 2),
-            "mape": round(mape_meals, 2),
-            "mae_units": round(mae_meals, 2),
-            "rmse_units": round(rmse_meals, 2)
-        }
-    }
+    if np.any(meal_mask):
+        mape_meals = float(np.mean(np.abs((act_m[meal_mask] - prd_m[meal_mask]) / act_m[meal_mask])) * 100.0)
+    else:
+        mape_meals = 0.0
 
-@app.get("/", response_class=HTMLResponse)
-async def serve_home():
-    file_path = os.path.join(os.path.dirname(__file__), "index.html")
-    if os.path.exists(file_path):
-        with open(file_path, "r", encoding="utf-8") as f:
-            return f.read()
-    return "<h1>KOTAai Engine Active</h1><p>index.html missing from root directory.</p>"
+    # 3. Bounded Accuracy Metrics (Bounded within 0.0% - 100.0%)
+    accuracy_rev = float(np.clip(100.0 - mape_rev, 0.0, 100.0))
+    accuracy_meals = float(np.clip(100.0 - mape_meals, 0.0, 100.0))
+
+    return PerformanceResponse(
+        revenue=MetricDetail(
+            accuracy=round(accuracy_rev, 2),
+            mape=round(mape_rev, 2),
+            mae=round(mae_rev, 2),
+            rmse=round(rmse_rev, 2),
+            active_days_evaluated=int(np.sum(rev_mask)),
+            total_days_in_window=len(test_df),
+            status_note="Metrics evaluated safely by excluding zero-sale operating days."
+        ),
+        meals=MetricDetail(
+            accuracy=round(accuracy_meals, 2),
+            mape=round(mape_meals, 2),
+            mae=round(mae_meals, 2),
+            rmse=round(rmse_meals, 2),
+            active_days_evaluated=int(np.sum(meal_mask)),
+            total_days_in_window=len(test_df),
+            status_note="Metrics evaluated safely by excluding zero-sale operating days."
+        )
+    )
+
+
+@app.get("/api/forecast")
+def get_forecast(days: int = Query(default=7, ge=1, le=30)):
+    """
+    Generates forward-looking daily demand forecasts for revenue and total meals.
+    """
+    df = fetch_aggregated_daily_data()
+
+    if df.empty:
+        return {"forecast": [], "note": "No transaction records found to generate baseline forecast."}
+
+    # Train model on full complete dataset
+    rev_model = train_prophet(df, "revenue")
+    meal_model = train_prophet(df, "meals")
+
+    future_dates = rev_model.make_future_dataframe(periods=days, freq="D")
+
+    forecast_rev = rev_model.predict(future_dates)
+    forecast_meals = meal_model.predict(future_dates)
+
+    # Extract future slice
+    future_rev_slice = forecast_rev.tail(days)
+    future_meal_slice = forecast_meals.tail(days)
+
+    results: List[Dict[str, Any]] = []
+
+    for r_row, m_row in zip(future_rev_slice.to_dict("records"), future_meal_slice.to_dict("records")):
+        results.append({
+            "ds": r_row["ds"].strftime("%Y-%m-%d"),
+            "predicted_revenue": round(max(0.0, float(r_row["yhat"])), 2),
+            "revenue_lower": round(max(0.0, float(r_row["yhat_lower"])), 2),
+            "revenue_upper": round(max(0.0, float(r_row["yhat_upper"])), 2),
+            "predicted_meals": int(round(max(0.0, float(m_row["yhat"])))),
+            "meals_lower": int(round(max(0.0, float(m_row["yhat_lower"])))),
+            "meals_upper": int(round(max(0.0, float(m_row["yhat_upper"]))))
+        })
+
+    return {"forecast": results}
+
+
+@app.get("/api/history")
+def get_historical_data(days: int = Query(default=30, ge=7, le=365)):
+    """
+    Returns sanitized daily historical totals for visualization and audit checks.
+    """
+    df = fetch_aggregated_daily_data()
+    if df.empty:
+        return {"history": []}
+
+    slice_df = df.tail(days)
+    slice_df["ds"] = slice_df["ds"].dt.strftime("%Y-%m-%d")
+    return {"history": slice_df.to_dict("records")}
+
+# ==========================================
+# 6. ENTRY POINT
+# ==========================================
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
