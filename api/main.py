@@ -245,7 +245,6 @@ async def dashboard(req: DashboardRequest):
     target_date_str = req.target_date if req.target_date else datetime.now().strftime("%Y-%m-%d")
     target_dt = pd.to_datetime(target_date_str).floor('D')
 
-    # OPTIMIZATION 1: Batch fetch all current stock levels from Supabase in ONE query
     stock_dict = {}
     if supabase and req.items:
         ingredient_names = [i.item_name.strip() for i in req.items]
@@ -257,7 +256,6 @@ async def dashboard(req: DashboardRequest):
         except Exception as e:
             logger.error(f"Batch stock fetch error: {e}")
 
-    # OPTIMIZATION 2: Pre-compute weekly meal forecasts ONCE instead of recalculating for every ingredient
     meal_forecast_cache = {}
     for meal_name in RECIPES.keys():
         meal_forecast_cache[meal_name] = run_safe_forecast(meal_name, target_end_date=target_dt, days=7)
@@ -269,11 +267,9 @@ async def dashboard(req: DashboardRequest):
         name = entry.item_name.strip()
         clean_target = clean_name(name)
         
-        # Priority: Supabase Bulk Fetch -> Payload stock -> 0.0
         stock = stock_dict.get(clean_target, float(entry.current_stock or 0.0))
 
         weekly_demand = 0.0
-        # Fast lookup across pre-calculated meal forecasts
         for meal_name, recipe in RECIPES.items():
             for ing, qty in recipe.items():
                 if clean_name(ing) == clean_target or clean_target in clean_name(ing):
