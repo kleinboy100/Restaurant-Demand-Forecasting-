@@ -1,404 +1,363 @@
-import os
-import logging
-import re
-from datetime import datetime
-from typing import Optional, List, Dict
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>KOTAai Ingredient & Model Intelligence</title>
+  <style>
+    :root { 
+      --high: #ff6b6b; 
+      --medium: #ffa502; 
+      --low: #4caf50; 
+      --header: #1a365d; 
+      --card: #ffffff;
+      --accent: #2b6cb0;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f4f8; padding: 15px; overflow-x: hidden; }
+    .container { max-width: 1280px; margin: 0 auto; }
+    
+    header { 
+      background: var(--header); 
+      color: white; 
+      padding: 1.5rem; 
+      border-radius: 16px; 
+      margin-bottom: 20px; 
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 15px;
+    }
+    header h1 { font-size: 1.8rem; }
+    header p { font-size: 0.95rem; opacity: 0.85; }
 
-import numpy as np
-import pandas as pd
-from prophet import Prophet
-from pydantic import BaseModel
-from fastapi import FastAPI, Query
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
-from supabase import create_client, Client
-import requests
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-app = FastAPI(title="KOTAai Ingredient Intelligence", version="6.1.0")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-supabase: Optional[Client] = None
-
-def init_supabase():
-    global supabase
-    url = os.getenv("SUPABASE_URL")
-    key = os.getenv("SUPABASE_ANON_KEY")
-    if url and key:
-        supabase = create_client(url, key)
-
-@app.on_event("startup")
-async def startup():
-    init_supabase()
-
-class DashboardItem(BaseModel):
-    item_name: str
-    current_stock: Optional[float] = None
-
-class DashboardRequest(BaseModel):
-    items: List[DashboardItem]
-    target_date: Optional[str] = None
-
-class MealForecastRequest(BaseModel):
-    meals: Optional[List[str]] = None
-    target_date: Optional[str] = None
-
-RECIPES: Dict[str, Dict[str, float]] = {
-    # --- Tops & Add-ons ---
-    "Frankfurter Short": {"Frankfurter": 1.0},
-    "Continental Russian Long": {"Russian": 1.0},
-    "Continental Russian Short": {"Russian": 1.0},
-    "Extra Sauce": {"Nosty Sauce": 1.0},
-    "Atchar": {"Atchar": 1.0},
-    "Egg": {"Egg": 1.0},
-    "Special Garlic": {"Special Garlic": 1.0},
-    "Burger": {"Burger": 1.0},
-    "Vienna": {"Vienna": 1.0},
-    "Cheese": {"Cheese": 1.0},
-    "Liver": {"Liver": 1.0},
-    "Cheese Russian Long": {"Cheesy Russian": 1.0},
-    "Cheese Russian Short": {"Cheesy Russian": 1.0},
-    "Frankfurter Long": {"Frankfurter": 1.0},
-
-    # --- Chips ---
-    "Chips Extra Large": {"Chips": 4.0},
-    "Chips Large": {"Chips": 3.0},
-    "Chips Medium": {"Chips": 2.0},
-    "Chips Small": {"Chips": 1.0},
-
-    # --- Combos ---
-    "Combo 10": {"Chips": 0.2, "Magwenya": 3.0},
-    "Combo 13": {"Chips": 0.3, "Magwenya": 4.0, "Polony": 0.0025},
-    "Combo 15": {"Chips": 0.2, "Magwenya": 5.0, "Polony": 0.025},
-    "Combo 25": {"Chips": 0.4, "Magwenya": 6.0, "Polony": 0.0025, "Vienna": 1.0},
-    "Combo 35": {"Chips": 0.3, "Magwenya": 6.0, "Polony": 0.025, "Russian": 1.0},
-    "Combo 45": {"Atchar": 2.5, "Chips": 1.0, "Liver": 1.0, "Magwenya": 6.0, "Russian": 1.0},
-
-    # --- Dagwoods ---
-    "Matlosana Dagwood": {"Bacon": 1.0, "Bread": 1.0, "Cheese": 2.0, "Cheesy Russian": 1.0, "Club Stake": 1.0, "Egg": 1.0, "Nosty Sauce": 1.0, "Onion": 0.0125, "Tomato": 0.167},
-    "Mofarasai Dagwood": {"Bacon": 1.0, "Bread": 1.0, "Cheese": 2.0, "Cheesy Russian": 1.0, "Egg": 1.0, "Nosty Sauce": 1.0, "Rib Burger": 1.0, "Tomato": 0.167},
-    "Original Dagwood": {"Bacon": 1.0, "Bread": 1.0, "Burger": 1.0, "Cheese": 1.0, "Egg": 1.0, "Nosty Sauce": 1.0, "Russian": 1.0, "Tomato": 0.167},
-    "Turbo Dagwood": {"Bread": 1.0, "Cheese": 1.0, "Chicken Russian": 1.0, "Egg": 1.0, "Nosty Sauce": 1.0, "Rib Burger": 1.0, "Tomato": 0.167},
-
-    # --- Loafs ---
-    "N12_1": {"Bread": 1.0, "Cheese": 2.0, "Chips": 1.0, "Egg": 2.0, "Loaf": 0.25, "Nosty Sauce": 1.0, "Polony": 0.1, "Russian": 1.0, "Vienna": 1.0},
-    "N12_2": {"Bread": 1.0, "Burger": 1.0, "Cheese": 2.0, "Chips": 1.0, "Egg": 2.0, "Loaf": 0.25, "Nosty Sauce": 1.0, "Polony": 0.15, "Russian": 1.0, "Vienna": 1.0},
-    "N12_3": {"Bacon": 1.0, "Bread": 1.0, "Burger": 2.0, "Cheese": 3.0, "Chips": 2.0, "Egg": 3.0, "Loaf": 0.25, "Nosty Sauce": 1.0, "Polony": 0.2, "Russian": 2.0, "Vienna": 2.0},
-    "N12_4": {"Bacon": 2.0, "Bread": 1.0, "Burger": 2.0, "Cheese": 4.0, "Chips": 2.0, "Egg": 4.0, "Loaf": 0.25, "Nosty Sauce": 1.0, "Polony": 0.25, "Russian": 3.0, "Vienna": 3.0},
-
-    # --- Kota Menu ---
-    "BBL Tower of Terror": {"Bacon": 1.0, "Bread": 0.25, "Cheese": 1.0, "Chips": 0.2, "Egg": 1.0, "Frankfurter": 1.0, "Lettuce": 0.005, "Polony": 0.0025, "Rib Burger": 1.0, "Russian": 1.0, "Nosty Sauce": 0.0005, "Vienna": 1.0},
-    "Bosrand": {"Bread": 0.25, "Cheese": 1.0, "Chips": 0.4, "Egg": 1.0, "Lettuce": 0.005, "Polony": 0.00025, "Nosty Sauce": 0.005, "Russian": 1.0},
-    "Cheesy D": {"Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 0.2, "Egg": 1.0, "Lettuce": 0.005, "Nosty Sauce": 0.025, "Russian": 1.0},
-    "Curry Fish Kota": {"Atchar": 1.0, "Bread": 0.25, "Curry Fish": 1.0},
-    "Dark City": {"Bread": 0.25, "Cheese": 1.0, "Cheesy Russian": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Nosty Sauce": 1.0},
-    "Di_Y_Kota": {"Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Ham": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Nosty Sauce": 1.0},
-    "Di_Z_Kota": {"Bread": 0.25, "Cheese": 1.0, "Cheesy Russian": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Nosty Sauce": 1.0},
-    "Down": {"Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Nosty Sauce": 1.0},
-    "Ext 10": {"Bread": 0.25, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Nosty Sauce": 1.0, "Polony": 0.025},
-    "Ext 6": {"Bacon": 1.0, "Bread": 0.25, "Chips": 1.0, "Egg": 1.0, "Fish Fillet": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Nosty Sauce": 1.0},
-    "Flamwood": {"Bacon": 1.0, "Bread": 0.25, "Cheese": 1.0, "Chicken Stripes": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Nosty Sauce": 1.0},
-    "J_town": {"Atchar": 1.0, "Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Nosty Sauce": 1.0, "Tomato": 0.167},
-    "La Hof": {"Bacon": 1.0, "Bread": 0.25, "Cheesy Russian": 1.0, "Chicken Stripes": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Nosty Sauce": 1.0},
-    "Laprovance": {"Bacon": 1.0, "Boere Wors": 1.0, "Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Club Stake": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Onion": 0.0125, "Polony": 0.025, "Russian": 1.0, "Nosty Sauce": 1.0},
-    "Mince Kota": {"Atchar": 1.0, "Bread": 0.25, "Mince": 1.0},
-    "Phelandaba": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Russian": 1.0, "Nosty Sauce": 1.0},
-    "Stop 1": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Polony": 0.025, "Nosty Sauce": 1.0},
-    "Stop 18": {"Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Polony": 0.025, "Russian": 1.0, "Nosty Sauce": 1.0},
-    "Stop 5_1": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Lettuce": 1.0, "Nosty Sauce": 1.0, "Vienna": 1.0},
-    "Stop 5+": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Ham": 1.0, "Lettuce": 1.0, "Nosty Sauce": 1.0, "Vienna": 1.0},
-    "Sun City": {"Bread": 0.25, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Frankfurter": 1.0, "Lettuce": 1.0, "Nosty Sauce": 1.0},
-    "Tower of Terror": {"Bacon": 1.0, "Bread": 0.25, "Burger": 1.0, "Cheese": 1.0, "Chips": 1.0, "Egg": 1.0, "Frankfurter": 1.0, "Lettuce": 1.0, "Polony": 0.025, "Russian": 1.0, "Nosty Sauce": 1.0}
-}
-
-MENU_MASTER_PRICES = {
-    "Chips Large": 40.00, "Chips Medium": 25.00, "Chips Extra Large": 60.00, "Chips Small": 15.00,
-    "Combo 35": 35.00, "Combo 15": 15.00, "Combo 45": 45.00, "Combo 25": 25.00, "Combo 10": 10.00, "Combo 13": 13.00,
-    "Turbo Dagwood": 80.00, "Matlosana Dagwood": 120.00, "Mofarasai Dagwood": 75.00, "Original Dagwood": 60.00,
-    "Tower of Terror": 120.00, "La Hof": 85.00, "Ext 10": 20.00, "Cheesy D": 70.00, "Ext 6": 75.00,
-    "Stop 1": 25.00, "Stop 5_1": 30.00, "Stop 5+": 35.00, "Bosrand": 40.00, "Sun City": 45.00,
-    "Phelandaba": 45.00, "Down": 45.00, "Di_Z_Kota": 55.00, "J_town": 65.00, "Flamwood": 75.00,
-    "BBL Tower of Terror": 140.00, "Laprovance": 199.00, "Stop 18": 40.00, "Dark City": 50.00, "Di_Y_Kota": 60.00,
-    "N12_4": 199.00, "N12_3": 140.00, "N12_1": 80.00, "N12_2": 99.00, "Frankfurter Short": 18.00,
-    "Continental Russian Long": 25.00, "Continental Russian Short": 18.00, "Extra Sauce": 3.00,
-    "Atchar": 5.00, "Egg": 5.00, "Special Garlic": 5.00, "Burger": 12.00, "Vienna": 8.00, "Cheese": 5.00,
-    "Liver": 5.00, "Cheese Russian Long": 30.00, "Cheese Russian Short": 22.00, "Frankfurter Long": 25.00
-}
-
-def clean_name(term: str) -> str:
-    return re.sub(r'[^a-zA-Z0-9]', '', term).lower()
-
-def get_unbiased_weather_factor() -> float:
-    try:
-        r = requests.get(
-            "https://api.open-meteo.com/v1/forecast?latitude=-26.85&longitude=26.66&daily=precipitation_probability_max&forecast_days=1&timezone=Africa/Johannesburg", 
-            timeout=3
-        )
-        prob = float(r.json()["daily"]["precipitation_probability_max"][0])
-        if prob <= 20.0:
-            return 1.0
-        return float(max(0.80, 1.0 - (prob - 20.0) * 0.0025))
-    except Exception as e:
-        logger.warning(f"Weather API unavailable: {e}")
-        return 1.0
-
-def fetch_continuous_sales_df(item_name: str, target_end_date: pd.Timestamp, lookback_days: int = 30) -> pd.DataFrame:
-    start_date = target_end_date - pd.Timedelta(days=lookback_days - 1)
-    full_date_range = pd.date_range(start=start_date, end=target_end_date, freq='D')
-    default_df = pd.DataFrame({"ds": full_date_range, "y": 0.0})
-
-    if not supabase:
-        return default_df
-
-    try:
-        search_token = item_name.split()[0] if item_name.split() else item_name
-        res = supabase.table("order_items").select("*").ilike("item_name", f"%{search_token}%").execute()
-        
-        if not res.data:
-            return default_df
-
-        df_items = pd.DataFrame(res.data)
-
-        target_clean = clean_name(item_name)
-        df_items["clean_name"] = df_items["item_name"].astype(str).apply(clean_name)
-        df_matched = df_items[df_items["clean_name"].str.contains(target_clean, na=False) | df_items["clean_name"].apply(lambda x: target_clean in x)]
-
-        if df_matched.empty:
-            return default_df
-
-        if "created_at" in df_matched.columns:
-            df_matched["ds"] = pd.to_datetime(df_matched["created_at"]).dt.tz_localize(None).dt.floor('D')
-            daily_agg = df_matched.groupby("ds")["quantity"].sum().reset_index().rename(columns={"quantity": "y"})
-        elif "order_id" in df_matched.columns:
-            order_ids = df_matched["order_id"].dropna().unique().tolist()
-            if not order_ids:
-                return default_df
-            orders = supabase.table("orders").select("id, created_at").in_("id", order_ids).execute()
-            if not orders.data:
-                return default_df
-            df_orders = pd.DataFrame(orders.data).rename(columns={"id": "order_id"})
-            df = pd.merge(df_matched, df_orders, on="order_id")
-            df["ds"] = pd.to_datetime(df["created_at"]).dt.tz_localize(None).dt.floor('D')
-            daily_agg = df.groupby("ds")["quantity"].sum().reset_index().rename(columns={"quantity": "y"})
-        else:
-            return default_df
-
-        merged_df = pd.merge(pd.DataFrame({"ds": full_date_range}), daily_agg, on="ds", how="left").fillna(0.0)
-        return merged_df
-
-    except Exception as e:
-        logger.error(f"Data Fetch Error [{item_name}]: {e}")
-        return default_df
-
-def run_safe_forecast(name: str, target_end_date: pd.Timestamp, days: int = 1) -> float:
-    df = fetch_continuous_sales_df(name, target_end_date=target_end_date, lookback_days=30)
-    total_sales = df["y"].sum()
-
-    if total_sales == 0:
-        return 0.0
-
-    recent_30d = df["y"].mean()
-    nonzero_days = (df["y"] > 0).sum()
-
-    if nonzero_days < 3:
-        return float(recent_30d * days)
-
-    try:
-        m = Prophet(yearly_seasonality=False, weekly_seasonality=True, daily_seasonality=False)
-        m.fit(df)
-        future = m.make_future_dataframe(periods=days)
-        forecast = m.predict(future)
-
-        future_yhat = forecast.tail(days)["yhat"].clip(lower=0.0)
-        return max(0.0, float(future_yhat.sum()))
-    except Exception as e:
-        logger.error(f"Prophet Exception [{name}]: {e}")
-        return max(0.0, float(recent_30d * days))
-
-@app.post("/api/forecast-meals")
-async def forecast_meals(req: Optional[MealForecastRequest] = None):
-    target_date_str = req.target_date if req and req.target_date else datetime.now().strftime("%Y-%m-%d")
-    target_dt = pd.to_datetime(target_date_str).floor('D')
-
-    target_meals = req.meals if req and req.meals and len(req.meals) > 0 else list(RECIPES.keys())
-    weather_factor = get_unbiased_weather_factor()
-    results = {}
-
-    for meal in target_meals:
-        predicted_daily = run_safe_forecast(meal, target_end_date=target_dt, days=1)
-        adjusted_val = predicted_daily * weather_factor
-        results[meal] = int(round(adjusted_val))
-
-    return results
-
-@app.post("/api/dashboard")
-async def dashboard(req: DashboardRequest):
-    target_date_str = req.target_date if req.target_date else datetime.now().strftime("%Y-%m-%d")
-    target_dt = pd.to_datetime(target_date_str).floor('D')
-
-    # OPTIMIZATION 1: Batch fetch all current stock levels from Supabase in ONE query
-    stock_dict = {}
-    if supabase and req.items:
-        ingredient_names = [i.item_name.strip() for i in req.items]
-        try:
-            stock_res = supabase.table("ingredient_stock").select("ingredient_name, current_stock").in_("ingredient_name", ingredient_names).execute()
-            if stock_res.data:
-                for row in stock_res.data:
-                    stock_dict[clean_name(row["ingredient_name"])] = float(row["current_stock"])
-        except Exception as e:
-            logger.error(f"Batch stock fetch error: {e}")
-
-    # OPTIMIZATION 2: Pre-compute weekly meal forecasts ONCE instead of recalculating for every ingredient
-    meal_forecast_cache = {}
-    for meal_name in RECIPES.keys():
-        meal_forecast_cache[meal_name] = run_safe_forecast(meal_name, target_end_date=target_dt, days=7)
-
-    out = []
-    total_rec = 0.0
-
-    for entry in req.items:
-        name = entry.item_name.strip()
-        clean_target = clean_name(name)
-        
-        # Priority: Supabase Bulk Fetch -> Payload stock -> 0.0
-        stock = stock_dict.get(clean_target, float(entry.current_stock or 0.0))
-
-        weekly_demand = 0.0
-        # Fast lookup across pre-calculated meal forecasts
-        for meal_name, recipe in RECIPES.items():
-            for ing, qty in recipe.items():
-                if clean_name(ing) == clean_target or clean_target in clean_name(ing):
-                    weekly_demand += (meal_forecast_cache[meal_name] * qty)
-                    break
-
-        if weekly_demand == 0.0:
-            weekly_demand = run_safe_forecast(name, target_end_date=target_dt, days=7)
-
-        daily = weekly_demand / 7.0
-        days_left = (stock / daily) if daily > 0 else (99.0 if stock > 0 else 0.0)
-
-        recommend = max(0.0, (weekly_demand * 1.5) - stock)
-        total_rec += recommend
-
-        urgency = "HIGH" if days_left < 3 else ("MEDIUM" if days_left < 7 else "LOW")
-        status = "CRITICAL" if days_left < 3 else "OK"
-        action = "REORDER NOW" if days_left < 3 else "Monitor stock"
-
-        out.append({
-            "item_name": name,
-            "current_stock": round(stock, 1),
-            "weekly_demand": round(weekly_demand, 1),
-            "days_left": round(days_left, 1),
-            "recommended_order": round(recommend, 1),
-            "urgency": urgency,
-            "status": status,
-            "action": action
-        })
-
-    return {
-        "summary": {
-            "total_items": len(out),
-            "critical_items": len([x for x in out if x["urgency"] == "HIGH"]),
-            "total_recommended": round(total_rec, 1),
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        },
-        "items": out
+    /* Calendar Filter Controls */
+    .filter-bar {
+      background: rgba(255, 255, 255, 0.15);
+      backdrop-filter: blur(8px);
+      padding: 10px 16px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .filter-bar label { font-weight: 600; font-size: 0.9rem; }
+    .date-picker {
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: 1px solid #cbd5e1;
+      font-size: 0.95rem;
+      outline: none;
+      font-weight: 600;
     }
 
-@app.get("/api/model-performance")
-async def model_performance(days: int = Query(14, ge=3, le=90)):
-    end_date = pd.Timestamp.now().floor('D') - pd.Timedelta(days=1)
-    start_date = end_date - pd.Timedelta(days=days - 1)
-    eval_dates = pd.date_range(start=start_date, end=end_date, freq='D')
+    /* Summary Card Section */
+    .summary-grid { 
+      display: grid; 
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); 
+      gap: 15px; 
+      margin-bottom: 25px; 
+    }
+    .summary-card { 
+      background: white; 
+      border-radius: 16px; 
+      padding: 20px; 
+      box-shadow: 0 4px 12px rgba(0,0,0,0.05); 
+      border-top: 4px solid var(--accent); 
+    }
+    .summary-card.revenue { border-top-color: #2e7d32; background: linear-gradient(135deg, #ffffff 0%, #f1f8e9 100%); }
+    .summary-card.kpi { border-top-color: #8e44ad; background: linear-gradient(135deg, #ffffff 0%, #f3e5f5 100%); }
+    .summary-card h3 { font-size: 0.85rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+    .summary-value { font-size: 1.9rem; font-weight: 800; color: var(--header); }
+    .sub-kpi { font-size: 0.8rem; color: #475569; margin-top: 4px; font-weight: 600; }
 
-    actual_meals_list, pred_meals_list = [], []
-    actual_rev_list, pred_rev_list = [], []
-
-    for eval_dt in eval_dates:
-        daily_actual_meals = 0
-        daily_actual_rev = 0.0
-        
-        if supabase:
-            try:
-                start_iso = eval_dt.strftime("%Y-%m-%d 00:00:00")
-                end_iso = eval_dt.strftime("%Y-%m-%d 23:59:59")
-                orders_res = supabase.table("orders").select("id, total_amount").gte("created_at", start_iso).lte("created_at", end_iso).execute()
-                if orders_res.data:
-                    for o in orders_res.data:
-                        daily_actual_rev += float(o.get("total_amount") or 0.0)
-
-                items_res = supabase.table("order_items").select("quantity").gte("created_at", start_iso).lte("created_at", end_iso).execute()
-                if items_res.data:
-                    daily_actual_meals = sum([int(i.get("quantity") or 0) for i in items_res.data])
-            except Exception as e:
-                logger.error(f"Error fetching actuals for performance backtest [{eval_dt}]: {e}")
-
-        daily_pred_meals = 0
-        daily_pred_rev = 0.0
-        for meal, price in MENU_MASTER_PRICES.items():
-            pred_q = run_safe_forecast(meal, target_end_date=eval_dt, days=1)
-            daily_pred_meals += pred_q
-            daily_pred_rev += (pred_q * price)
-
-        actual_meals_list.append(daily_actual_meals)
-        pred_meals_list.append(daily_pred_meals)
-        actual_rev_list.append(daily_actual_rev)
-        pred_rev_list.append(daily_pred_rev)
-
-    act_rev = np.array(actual_rev_list)
-    prd_rev = np.array(pred_rev_list)
-    act_m = np.array(actual_meals_list)
-    prd_m = np.array(pred_meals_list)
-
-    mae_rev = float(np.mean(np.abs(prd_rev - act_rev)))
-    mae_meals = float(np.mean(np.abs(prd_m - act_m)))
-
-    rmse_rev = float(np.sqrt(np.mean((prd_rev - act_rev) ** 2)))
-    rmse_meals = float(np.sqrt(np.mean((prd_m - act_m) ** 2)))
-
-    with np.errstate(divide='ignore', invalid='ignore'):
-        mape_rev_arr = np.abs((act_rev - prd_rev) / np.where(act_rev == 0, 1.0, act_rev))
-        mape_meals_arr = np.abs((act_m - prd_m) / np.where(act_m == 0, 1.0, act_m))
-        
-    mape_rev = float(np.mean(mape_rev_arr) * 100.0)
-    mape_meals = float(np.mean(mape_meals_arr) * 100.0)
-
-    rev_accuracy = max(0.0, min(100.0, 100.0 - mape_rev))
-    meal_accuracy = max(0.0, min(100.0, 100.0 - mape_meals))
-
-    return {
-        "evaluation_period_days": days,
-        "revenue_kpis": {
-            "accuracy_percentage": round(rev_accuracy, 2),
-            "mape": round(mape_rev, 2),
-            "mae_zar": round(mae_rev, 2),
-            "rmse_zar": round(rmse_rev, 2)
-        },
-        "meal_sales_kpis": {
-            "accuracy_percentage": round(meal_accuracy, 2),
-            "mape": round(mape_meals, 2),
-            "mae_units": round(mae_meals, 2),
-            "rmse_units": round(rmse_meals, 2)
-        }
+    .dashboard-section { background: white; border-radius: 16px; padding: 20px; margin-bottom: 25px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+    .section-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 15px; }
+    
+    .search-input {
+      padding: 8px 14px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      outline: none;
+      width: 250px;
     }
 
-@app.get("/", response_class=HTMLResponse)
-async def serve_home():
-    file_path = os.path.join(os.path.dirname(__file__), "index.html")
-    if os.path.exists(file_path):
-        with open(file_path, "r", encoding="utf-8") as f:
-            return f.read()
-    return "<h1>KOTAai Engine Active</h1><p>index.html missing from root directory.</p>"
+    .table-container { width: 100%; overflow-x: auto; border-radius: 12px; max-height: 480px; overflow-y: auto; border: 1px solid #e2e8f0; }
+    table { width: 100%; border-collapse: collapse; min-width: 750px; font-size: 0.9rem; }
+    th { background: var(--header); color: white; text-align: left; padding: 14px; position: sticky; top: 0; z-index: 10; font-weight: 600; }
+    td { padding: 12px 14px; border-bottom: 1px solid #e2e8f0; font-weight: 500; }
+    tr:nth-child(even) { background-color: #f8fafc; }
+    tr:hover { background-color: #f1f5f9; }
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+    tr.critical-row { background-color: #fff5f5; border-left: 4px solid var(--high); }
+    .urgency-badge { padding: 4px 10px; border-radius: 20px; font-weight: 700; font-size: 0.75rem; text-transform: uppercase; }
+    .urgency-high { background: #fee2e2; color: #c53030; }
+    .urgency-medium { background: #fffbeb; color: #92400e; }
+    .urgency-low { background: #f0fdf4; color: #166534; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div>
+        <h1>🍛 KOTAai INGREDIENT INTELLIGENCE</h1>
+        <p>Unbiased Model Forecasting • Nosty'$ Fresh Fast Food</p>
+      </div>
+
+      <!-- Calendar Date Filter -->
+      <div class="filter-bar">
+        <label for="filter-date">📅 Select Date:</label>
+        <input type="date" id="filter-date" class="date-picker" onchange="fetchData()" />
+      </div>
+    </header>
+
+    <!-- Metrics & Performance KPI Cards -->
+    <div class="summary-grid">
+      <div class="summary-card revenue">
+        <h3>💰 Projected Daily Revenue</h3>
+        <div class="summary-value" id="total-revenue-card">R 0.00</div>
+      </div>
+      <div class="summary-card">
+        <h3>📦 Forecasted Daily Meals</h3>
+        <div class="summary-value" id="total-meals-card">0 units</div>
+      </div>
+      <div class="summary-card kpi">
+        <h3>📈 Revenue Model Accuracy</h3>
+        <div class="summary-value" id="rev-accuracy-card">0.0%</div>
+        <div class="sub-kpi" id="rev-kpi-sub">MAPE: 0% | MAE: R 0.00</div>
+      </div>
+      <div class="summary-card kpi">
+        <h3>🎯 Meal Prediction Accuracy</h3>
+        <div class="summary-value" id="meal-accuracy-card">0.0%</div>
+        <div class="sub-kpi" id="meal-kpi-sub">MAPE: 0% | RMSE: 0 units</div>
+      </div>
+    </div>
+
+    <!-- Meal Sales Forecast Table -->
+    <div class="dashboard-section">
+      <div class="section-header">
+        <h3>📊 Daily Meal Sales & Revenue Forecast</h3>
+        <input type="text" id="meal-search" class="search-input" placeholder="Search meal or category..." onkeyup="filterMealTable()" />
+      </div>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Meal Name</th>
+              <th>Category</th>
+              <th>Price (ZAR)</th>
+              <th>Expected Sales (Units)</th>
+              <th>Projected Total (ZAR)</th>
+            </tr>
+          </thead>
+          <tbody id="meal-forecast-body">
+            <tr><td colspan="5" style="text-align:center;">Loading meal forecasts...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Live Inventory Table -->
+    <div class="dashboard-section">
+      <div class="section-header">
+        <h3>📋 Live Inventory Dashboard</h3>
+      </div>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Ingredient</th>
+              <th>Current Stock</th>
+              <th>Weekly Demand</th>
+              <th>Days Left</th>
+              <th>Reorder Qty</th>
+              <th>Urgency</th>
+              <th>Status</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="table-body">
+            <tr><td colspan="8" style="text-align:center;">Synchronizing with database...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const MENU_MASTER = {
+      "Chips Large": { category: "Chips", price: 40.00 },
+      "Chips Medium": { category: "Chips", price: 25.00 },
+      "Chips Extra Large": { category: "Chips", price: 60.00 },
+      "Chips Small": { category: "Chips", price: 15.00 },
+      "Combo 35": { category: "Combo Menu", price: 35.00 },
+      "Combo 15": { category: "Combo Menu", price: 15.00 },
+      "Combo 45": { category: "Combo Menu", price: 45.00 },
+      "Combo 25": { category: "Combo Menu", price: 25.00 },
+      "Combo 10": { category: "Combo Menu", price: 10.00 },
+      "Combo 13": { category: "Combo Menu", price: 13.00 },
+      "Turbo Dagwood": { category: "Dagwoods", price: 80.00 },
+      "Matlosana Dagwood": { category: "Dagwoods", price: 120.00 },
+      "Mofarasai Dagwood": { category: "Dagwoods", price: 75.00 },
+      "Original Dagwood": { category: "Dagwoods", price: 60.00 },
+      "Tower of Terror": { category: "Kota Menu", price: 120.00 },
+      "La Hof": { category: "Kota Menu", price: 85.00 },
+      "Ext 10": { category: "Kota Menu", price: 20.00 },
+      "Cheesy D": { category: "Kota Menu", price: 70.00 },
+      "Ext 6": { category: "Kota Menu", price: 75.00 },
+      "Stop 1": { category: "Kota Menu", price: 25.00 },
+      "Stop 5_1": { category: "Kota Menu", price: 30.00 },
+      "Stop 5+": { category: "Kota Menu", price: 35.00 },
+      "Bosrand": { category: "Kota Menu", price: 40.00 },
+      "Sun City": { category: "Kota Menu", price: 45.00 },
+      "Phelandaba": { category: "Kota Menu", price: 45.00 },
+      "Down": { category: "Kota Menu", price: 45.00 },
+      "Di_Z_Kota": { category: "Kota Menu", price: 55.00 },
+      "J_town": { category: "Kota Menu", price: 65.00 },
+      "Flamwood": { category: "Kota Menu", price: 75.00 },
+      "BBL Tower of Terror": { category: "Kota Menu", price: 140.00 },
+      "Laprovance": { category: "Kota Menu", price: 199.00 },
+      "Stop 18": { category: "Kota Menu", price: 40.00 },
+      "Dark City": { category: "Kota Menu", price: 50.00 },
+      "Di_Y_Kota": { category: "Kota Menu", price: 60.00 },
+      "N12_4": { category: "Loafs", price: 199.00 },
+      "N12_3": { category: "Loafs", price: 140.00 },
+      "N12_1": { category: "Loafs", price: 80.00 },
+      "N12_2": { category: "Loafs", price: 99.00 },
+      "Frankfurter Short": { category: "Tops", price: 18.00 },
+      "Continental Russian Long": { category: "Tops", price: 25.00 },
+      "Continental Russian Short": { category: "Tops", price: 18.00 },
+      "Extra Sauce": { category: "Tops", price: 3.00 },
+      "Atchar": { category: "Tops", price: 5.00 },
+      "Egg": { category: "Tops", price: 5.00 },
+      "Special Garlic": { category: "Tops", price: 5.00 },
+      "Burger": { category: "Tops", price: 12.00 },
+      "Vienna": { category: "Tops", price: 8.00 },
+      "Cheese": { category: "Tops", price: 5.00 },
+      "Liver": { category: "Tops", price: 5.00 },
+      "Cheese Russian Long": { category: "Tops", price: 30.00 },
+      "Cheese Russian Short": { category: "Tops", price: 22.00 },
+      "Frankfurter Long": { category: "Tops", price: 25.00 }
+    };
+
+    let allMealDataRows = [];
+
+    // Default to today's date in calendar
+    document.getElementById('filter-date').value = new Date().toISOString().split('T')[0];
+
+    async function fetchData() {
+      const selectedDate = document.getElementById('filter-date').value;
+
+      try {
+        // 1. Fetch Forecast Data with Date Filter
+        const mRes = await fetch('/api/forecast-meals', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target_date: selectedDate })
+        });
+        const mData = await mRes.json();
+        
+        let grandTotalRevenue = 0;
+        let grandTotalMeals = 0;
+        allMealDataRows = [];
+
+        Object.keys(MENU_MASTER).forEach(mealName => {
+          const itemMeta = MENU_MASTER[mealName];
+          const forecastQty = mData[mealName] || 0;
+          const totalLineRevenue = forecastQty * itemMeta.price;
+
+          grandTotalRevenue += totalLineRevenue;
+          grandTotalMeals += forecastQty;
+
+          allMealDataRows.push({
+            name: mealName,
+            category: itemMeta.category,
+            price: itemMeta.price,
+            forecast: forecastQty,
+            totalRevenue: totalLineRevenue
+          });
+        });
+
+        document.getElementById('total-revenue-card').textContent = `R ${grandTotalRevenue.toLocaleString('en-ZA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        document.getElementById('total-meals-card').textContent = `${grandTotalMeals} units`;
+
+        renderMealTable(allMealDataRows);
+
+        // 2. Fetch Model Performance KPIs
+        const perfRes = await fetch('/api/model-performance?days=14');
+        const perf = await perfRes.json();
+
+        document.getElementById('rev-accuracy-card').textContent = `${perf.revenue_kpis.accuracy_percentage}%`;
+        document.getElementById('rev-kpi-sub').textContent = `MAPE: ${perf.revenue_kpis.mape}% | MAE: R ${perf.revenue_kpis.mae_zar}`;
+
+        document.getElementById('meal-accuracy-card').textContent = `${perf.meal_sales_kpis.accuracy_percentage}%`;
+        document.getElementById('meal-kpi-sub').textContent = `MAPE: ${perf.meal_sales_kpis.mape}% | RMSE: ${perf.meal_sales_kpis.rmse_units} units`;
+
+        // 3. Fetch Full Inventory Table with Date Filter
+        const ingredients = [
+          "Atchar", "Bacon", "Boere Wors", "Burger", "Rib Burger", "Cheese", 
+          "Russian", "Cheesy Russian", "Chicken Russian", "Chicken Stripes", "Chips", 
+          "Curry Fish", "Egg", "Fish Fillet", "Frankfurter", "Ham", "Lettuce", 
+          "Liver", "Magwenya", "Mince", "Nosty Sauce", "Onion", "Polony", 
+          "Special Garlic", "Club Stake", "Vienna", "Bread"
+        ];
+
+        const dRes = await fetch('/api/dashboard', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            items: ingredients.map(n => ({ item_name: n })),
+            target_date: selectedDate 
+          })
+        });
+        const d = await dRes.json();
+
+        const tbody = document.getElementById('table-body');
+        tbody.innerHTML = d.items.map(i => `
+          <tr class="${i.urgency === 'HIGH' ? 'critical-row' : ''}">
+            <td><strong>${i.item_name}</strong></td>
+            <td>${i.current_stock}</td>
+            <td>${i.weekly_demand}</td>
+            <td>${i.days_left}</td>
+            <td><strong>${i.recommended_order}</strong></td>
+            <td><span class="urgency-badge urgency-${i.urgency.toLowerCase()}">${i.urgency}</span></td>
+            <td>${i.status}</td>
+            <td>${i.action}</td>
+          </tr>
+        `).join('');
+
+      } catch (err) { console.error("Sync Error:", err); }
+    }
+
+    function renderMealTable(items) {
+      const mealTbody = document.getElementById('meal-forecast-body');
+      if (items.length === 0) {
+        mealTbody.innerHTML = `<tr><td colspan="5" style="text-align:center;">No matching meals found.</td></tr>`;
+        return;
+      }
+
+      mealTbody.innerHTML = items.map(m => `
+        <tr>
+          <td><strong>${m.name}</strong></td>
+          <td><span style="background: #e2e8f0; padding: 3px 8px; border-radius: 6px; font-size: 0.8rem;">${m.category}</span></td>
+          <td>R ${m.price.toFixed(2)}</td>
+          <td><strong>${m.forecast}</strong></td>
+          <td style="color: #2e7d32; font-weight: 700;">R ${m.totalRevenue.toFixed(2)}</td>
+        </tr>
+      `).join('');
+    }
+
+    function filterMealTable() {
+      const q = document.getElementById('meal-search').value.toLowerCase();
+      const filtered = allMealDataRows.filter(m => 
+        m.name.toLowerCase().includes(q) || m.category.toLowerCase().includes(q)
+      );
+      renderMealTable(filtered);
+    }
+
+    fetchData();
+  </script>
+</body>
+    </html>
