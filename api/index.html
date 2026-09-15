@@ -244,58 +244,70 @@
 
     let allMealDataRows = [];
 
-    // Default to today's date in calendar
+    // Set today's date in picker
     document.getElementById('filter-date').value = new Date().toISOString().split('T')[0];
 
     async function fetchData() {
       const selectedDate = document.getElementById('filter-date').value;
 
+      // 1. Fetch Forecast Data
       try {
-        // 1. Fetch Forecast Data with Date Filter
         const mRes = await fetch('/api/forecast-meals', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ target_date: selectedDate })
         });
-        const mData = await mRes.json();
         
-        let grandTotalRevenue = 0;
-        let grandTotalMeals = 0;
-        allMealDataRows = [];
+        if (mRes.ok) {
+          const mData = await mRes.json();
+          let grandTotalRevenue = 0;
+          let grandTotalMeals = 0;
+          allMealDataRows = [];
 
-        Object.keys(MENU_MASTER).forEach(mealName => {
-          const itemMeta = MENU_MASTER[mealName];
-          const forecastQty = mData[mealName] || 0;
-          const totalLineRevenue = forecastQty * itemMeta.price;
+          Object.keys(MENU_MASTER).forEach(mealName => {
+            const itemMeta = MENU_MASTER[mealName];
+            const forecastQty = mData[mealName] || 0;
+            const totalLineRevenue = forecastQty * itemMeta.price;
 
-          grandTotalRevenue += totalLineRevenue;
-          grandTotalMeals += forecastQty;
+            grandTotalRevenue += totalLineRevenue;
+            grandTotalMeals += forecastQty;
 
-          allMealDataRows.push({
-            name: mealName,
-            category: itemMeta.category,
-            price: itemMeta.price,
-            forecast: forecastQty,
-            totalRevenue: totalLineRevenue
+            allMealDataRows.push({
+              name: mealName,
+              category: itemMeta.category,
+              price: itemMeta.price,
+              forecast: forecastQty,
+              totalRevenue: totalLineRevenue
+            });
           });
-        });
 
-        document.getElementById('total-revenue-card').textContent = `R ${grandTotalRevenue.toLocaleString('en-ZA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-        document.getElementById('total-meals-card').textContent = `${grandTotalMeals} units`;
+          document.getElementById('total-revenue-card').textContent = `R ${grandTotalRevenue.toLocaleString('en-ZA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+          document.getElementById('total-meals-card').textContent = `${grandTotalMeals} units`;
 
-        renderMealTable(allMealDataRows);
+          renderMealTable(allMealDataRows);
+        }
+      } catch (err) {
+        console.error("Meal forecast error:", err);
+      }
 
-        // 2. Fetch Model Performance KPIs
+      // 2. Fetch Performance KPIs
+      try {
         const perfRes = await fetch('/api/model-performance?days=14');
-        const perf = await perfRes.json();
+        if (perfRes.ok) {
+          const perf = await perfRes.json();
+          document.getElementById('rev-accuracy-card').textContent = `${perf.revenue_kpis.accuracy_percentage}%`;
+          document.getElementById('rev-kpi-sub').textContent = `MAPE: ${perf.revenue_kpis.mape}% | MAE: R ${perf.revenue_kpis.mae_zar}`;
 
-        document.getElementById('rev-accuracy-card').textContent = `${perf.revenue_kpis.accuracy_percentage}%`;
-        document.getElementById('rev-kpi-sub').textContent = `MAPE: ${perf.revenue_kpis.mape}% | MAE: R ${perf.revenue_kpis.mae_zar}`;
+          document.getElementById('meal-accuracy-card').textContent = `${perf.meal_sales_kpis.accuracy_percentage}%`;
+          document.getElementById('meal-kpi-sub').textContent = `MAPE: ${perf.meal_sales_kpis.mape}% | RMSE: ${perf.meal_sales_kpis.rmse_units} units`;
+        }
+      } catch (err) {
+        console.error("Performance API error:", err);
+      }
 
-        document.getElementById('meal-accuracy-card').textContent = `${perf.meal_sales_kpis.accuracy_percentage}%`;
-        document.getElementById('meal-kpi-sub').textContent = `MAPE: ${perf.meal_sales_kpis.mape}% | RMSE: ${perf.meal_sales_kpis.rmse_units} units`;
-
-        // 3. Fetch Full Inventory Table with Date Filter
+      // 3. Fetch Ingredient Inventory
+      const tbody = document.getElementById('table-body');
+      try {
         const ingredients = [
           "Atchar", "Bacon", "Boere Wors", "Burger", "Rib Burger", "Cheese", 
           "Russian", "Cheesy Russian", "Chicken Russian", "Chicken Stripes", "Chips", 
@@ -312,23 +324,32 @@
             target_date: selectedDate 
           })
         });
+
+        if (!dRes.ok) throw new Error(`Server returned status ${dRes.status}`);
+        
         const d = await dRes.json();
+        
+        if (d && d.items) {
+          tbody.innerHTML = d.items.map(i => `
+            <tr class="${i.urgency === 'HIGH' ? 'critical-row' : ''}">
+              <td><strong>${i.item_name}</strong></td>
+              <td>${i.current_stock}</td>
+              <td>${i.weekly_demand}</td>
+              <td>${i.days_left}</td>
+              <td><strong>${i.recommended_order}</strong></td>
+              <td><span class="urgency-badge urgency-${(i.urgency || 'low').toLowerCase()}">${i.urgency}</span></td>
+              <td>${i.status}</td>
+              <td>${i.action}</td>
+            </tr>
+          `).join('');
+        } else {
+          tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color:red;">No inventory data returned.</td></tr>`;
+        }
 
-        const tbody = document.getElementById('table-body');
-        tbody.innerHTML = d.items.map(i => `
-          <tr class="${i.urgency === 'HIGH' ? 'critical-row' : ''}">
-            <td><strong>${i.item_name}</strong></td>
-            <td>${i.current_stock}</td>
-            <td>${i.weekly_demand}</td>
-            <td>${i.days_left}</td>
-            <td><strong>${i.recommended_order}</strong></td>
-            <td><span class="urgency-badge urgency-${i.urgency.toLowerCase()}">${i.urgency}</span></td>
-            <td>${i.status}</td>
-            <td>${i.action}</td>
-          </tr>
-        `).join('');
-
-      } catch (err) { console.error("Sync Error:", err); }
+      } catch (err) { 
+        console.error("Sync Error:", err); 
+        tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color:red;">Failed to connect to backend server (${err.message}). Check your FastAPI terminal.</td></tr>`;
+      }
     }
 
     function renderMealTable(items) {
@@ -357,7 +378,8 @@
       renderMealTable(filtered);
     }
 
+    // Run on page load
     fetchData();
   </script>
 </body>
-    </html>
+</html>
